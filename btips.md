@@ -109,6 +109,38 @@ struct TxEventProof {
 
 ---
 
+### 2026-04-10
+
+#### ✅ btip-24.md — cancelNullifier 추가 및 설명 정비
+
+- `cancelNullifier(bytes32 eventRootHash)` 함수 인터페이스 추가
+- 인터페이스 주석, 설명 bullet, Implementation 슈도코드 및 설명 추가
+- "dApp에서의 Nullifier 취소" 섹션 추가 (호출 흐름 다이어그램 포함)
+- Conclusion에 `cancelNullifier` msg.sender 기반 접근 제어 설명 추가
+
+#### ✅ btip-26.md — cancelLinkerEvent 추가 및 설명 정비
+
+- `cancelLinkerEvent(bytes32 eventRootHash)` 함수 인터페이스 추가
+- 파라미터 설명 추가 (`eventRootHash`: 취소할 이벤트의 머클 트리 루트 해시)
+- 내부에서 `BTIP24`의 `cancelNullifier` 호출함을 명시
+
+#### ✅ 스펙 참조 표기 규칙 강화 — BTIP21(LinkerEndpoint) 형식 (btip-23, 24, 26)
+
+- **규칙**: 구현체명(LinkerEndpoint 등)은 보조적 표기로만 사용, 메인 이름은 `BTIPxx`
+- 표기 형식: `BTIP21(LinkerEndpoint)` (산문), `[BTIP21(LinkerEndpoint)](./btip-21.md)` (링크 포함)
+- btip-23: `LinkerVerifier` → `BTIP23(LinkerVerifier)`, `LinkerEndpoint` → `[BTIP21(LinkerEndpoint)](./btip-21.md)`, `LinkerPolicy` → `[BTIP22(LinkerPolicy)](./btip-22-xx.md)`
+- btip-24: `LinkerNullifier` → `BTIP24(LinkerNullifier)`, `LinkerEndpoint` → `[BTIP21(LinkerEndpoint)](./btip-21.md)` (산문 6곳 + 섹션 헤딩)
+- btip-26: `LinkerEndpoint` → `[BTIP21(LinkerEndpoint)](./btip-21.md)` (산문 2곳)
+- 코드 블록 내부 주석, 자기 문서 참조는 변경 제외
+
+#### ✅ README.md — 실제 파일 기준으로 테이블 재정비
+
+- 존재하지 않는 파일 항목 제거: BTIP15, BTIP17-draft, BTIP18, BTIP22
+- BTIP25, BTIP26 항목 추가
+- 타이틀 실제 frontmatter 기준으로 교정 (BTIP19, BTIP20 등)
+
+---
+
 ### 2026-04-06
 
 #### ✅ TxEventProofPayload에 `mspids` 필드 추가 — 조직별 Root CA 조회
