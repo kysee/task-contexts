@@ -245,6 +245,55 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 - **`CommitSignature.timestamp` 필드**: `CanonicalVote` 서명 입력 메시지에 `timestamp`가 포함되므로, 서명 검증을 위해 각 Validator의 투표 시각이 필수.
 - **Amino 인코딩 이유**: Tendermint 헤더 14개 필드가 이질적 타입(`int64`, `string`, `time.Time`, 구조체, `[]byte`)이므로, 모든 타입을 바이트로 변환하는 정규 직렬화가 필요. `[]byte` 필드에도 일괄 적용하는 이유는 타입별 분기 없는 코드 일관성.
 
+#### ✅ btip-29.md — LinkerEndpoint Chaincode on BPrN 신규 생성
+
+- BTIP21(LinkerEndpoint on BPuN)의 BPrN 대응 문서
+- BPuN 이벤트 증명(`BPuNTxEventProofPayload`)의 유일한 관문(Gateway) 체인코드
+- Go 구조체로 `BPuNTxEventProofPayload` 전체 정의 (BTIP28 대응)
+- `OnProof`: Nullifier 검사(BTIP33) → 검증 위임(BTIP31) → 상태 기록 → 애플리케이션 이벤트 전달
+- `SetVerifierChaincodeID`, `SetNullifierChaincodeID` 관리자 함수
+- `ProofReceived`, `ProofVerified` 이벤트 정의
+- Fabric 체인코드의 원자성 보장 설명 (보증 실패 시 커밋되지 않음)
+
+#### ✅ btip-31.md — LinkerVerifier Chaincode on BPrN 신규 생성
+
+- BTIP23(LinkerVerifier on BPuN)의 BPrN 대응 문서
+- BTIP28 검증 절차 Step 2~6 구현 (Step 1은 BTIP29 책임)
+- `VerifyProof`: Validator Set 조회(BTIP32) → Ed25519 서명 검증 → RFC 6962 머클 증명 → BTIP27 머클 증명
+- 외부 의존성: BTIP32(ValidatorSetRegistry), Ed25519, 두 종류의 머클 증명
+- BTIP23(Precompiled Contract 사용)과의 차이 명시
+
+#### ✅ btip-32.md — ValidatorSetRegistry Chaincode on BPrN 신규 생성
+
+- BPuN Validator Set(공개키, Voting Power, 주소)을 블록 높이별로 보관
+- BTIP28의 "Verifier가 Validator Set을 보유" 전제를 충족하는 체인코드
+- BTIP22(LinkerPolicy on BPuN)와 대칭적 역할 (상대 네트워크의 신뢰 기반 보관)
+- `GetValidatorSet(height)`: 범위 조회로 해당 높이에 유효한 ValidatorSet 반환
+- `SetValidatorSet`: 현재 수동 등록, 향후 Light Client 자동 동기화로 대체 가능
+- 저장소 설계: `VS_{height}` 키, 0-패딩 16자리로 범위 조회 지원
+- IBTIP22.sol / LinkerPolicy.sol 참조하여 설계 (소스 경로: `linker-v2/verifier/on-bpun/contracts/`)
+
+#### ✅ btip-33.md — LinkerNullifier Chaincode on BPrN 신규 생성
+
+- BTIP24(LinkerNullifier on BPuN)의 BPrN 대응 문서
+- Nullifier: `sha256(txEventRoot || targetApp)` — commit_sigs 제외 (BTIP24와 동일 근거)
+- `IsProcessed`, `MarkProcessed`, `CancelNullifier` 인터페이스
+- `CancelNullifier`: 호출자 X.509 인증서 기반 접근 제어 (BTIP24의 `msg.sender`에 대응)
+- Nullifier 대상 차이: BTIP24는 `event_root_hash`(= `event_log_root`), BTIP33은 `txEventRoot`(= `tx_event_root`)
+
+#### ✅ README.md — BTIP29~33 항목 추가
+
+- BTIP29 (LinkerEndpoint Chaincode on BPrN) 항목 추가
+- BTIP30 (Reserved) 항목 추가
+- BTIP31 (LinkerVerifier Chaincode on BPrN) 항목 추가
+- BTIP32 (ValidatorSetRegistry Chaincode on BPrN) 항목 추가
+- BTIP33 (LinkerNullifier Chaincode on BPrN) 항목 추가
+
+#### 설계 원칙 기록
+
+- **자료구조/인터페이스 표기**: BPrN 체인코드는 Go 문법으로 작성 (BPuN 스마트 컨트랙트는 Solidity)
+- **BPuN ↔ BPrN 대칭 매핑**: BTIP21↔29, BTIP22↔32, BTIP23↔31, BTIP24↔33
+
 ### 2026-04-12
 
 #### ✅ btip-16.md — 머클 트리 null 기반 처리로 변경
@@ -436,6 +485,10 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 | `btip-26.md` | ✅ 신규 | BTIP26 interface (handleLinkerEvent) — dApp 콜백 인터페이스 |
 | `btip-27.md` | ✅ 신규 | BPuN Event Structure — 2단계 머클 트리(`event_attrs_root` → `tx_event_root`), Tendermint 합의 통합 |
 | `btip-28.md` | ✅ 신규 | BPuN Tx/Event Proof — 다이제스트 페이로드(`last_results_proof`, `tx_result_proof`, `event_attrs_root_proof`, `event_attr_proofs`), Validator 서명 검증 |
+| `btip-29.md` | ✅ 신규 | LinkerEndpoint Chaincode on BPrN — Gateway, `OnProof`, Go 구조체 (BTIP21 대응) |
+| `btip-31.md` | ✅ 신규 | LinkerVerifier Chaincode on BPrN — BTIP28 Step 2~6 검증 (BTIP23 대응) |
+| `btip-32.md` | ✅ 신규 | ValidatorSetRegistry Chaincode on BPrN — Validator Set 블록 높이별 보관 (BTIP22 대응) |
+| `btip-33.md` | ✅ 신규 | LinkerNullifier Chaincode on BPrN — 리플레이 방어, `sha256(txEventRoot\|\|targetApp)` (BTIP24 대응) |
 
 ---
 
@@ -497,5 +550,14 @@ BPrN → BPuN 방향:
                              ← btip24 (LinkerNullifier)
 
 BPuN → BPrN 방향:
-  btip27 ← btip28
+  btip27 ← btip28 ← btip29 (LinkerEndpoint)
+                    ← btip31 (LinkerVerifier)
+                         ← btip32 (ValidatorSetRegistry)
+                    ← btip33 (LinkerNullifier)
+
+BPuN ↔ BPrN 대칭 매핑:
+  BTIP21 (LinkerEndpoint on BPuN)    ↔ BTIP29 (LinkerEndpoint on BPrN)
+  BTIP22 (LinkerPolicy on BPuN)     ↔ BTIP32 (ValidatorSetRegistry on BPrN)
+  BTIP23 (LinkerVerifier on BPuN)   ↔ BTIP31 (LinkerVerifier on BPrN)
+  BTIP24 (LinkerNullifier on BPuN)  ↔ BTIP33 (LinkerNullifier on BPrN)
 ```
