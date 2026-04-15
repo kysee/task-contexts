@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-04-14
+last_updated: 2026-04-15
 ---
 
 # BTIPS 작업 컨텍스트
@@ -294,6 +294,69 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 - **자료구조/인터페이스 표기**: BPrN 체인코드는 Go 문법으로 작성 (BPuN 스마트 컨트랙트는 Solidity)
 - **BPuN ↔ BPrN 대칭 매핑**: BTIP21↔29, BTIP22↔32, BTIP23↔31, BTIP24↔33
 
+### 2026-04-15
+
+#### ✅ btip-27~33 — 가독성 전면 개선 (Technical Writer 관점)
+
+- 문장·단락 간 연결 표현 추가, 끊기는 2-문장 패턴 통합
+- 불릿 설명 앞 안내 문장 추가, 코드 블록 전후 맥락 연결
+- Abstract·Motivation·Conclusion 문체 개선
+
+#### ✅ btip-27 — 구조 개선
+
+- "Transaction Event", "EVM Contract Event" 단락 → 각각 `Example: Transfer Transaction`, `Example: EVM Contract Transaction` 섹션의 `[!NOTE]` 인용문으로 이동
+- `## Event Root in Tendermint Consensus` 섹션 → btip-28 `### Single-Path Trust Model (BPuN)`로 통합 이동 (BTIP27 범위는 `tx_event_root` 산출까지)
+- `Merkle Tree Construction`, `Merkle Proof` 섹션 제거 → BTIP16 Merkle Tree 참조 한 줄로 대체
+
+#### ✅ btip-16 — BTIP16 Merkle Tree Appendix 추가
+
+- `## Appendix: BTIP16 Merkle Tree` 섹션 추가 (문서 끝, `---` 구분선 이후)
+- 트리 구성, hashPair 규칙, MerkleProof 구조, 검증 알고리즘 독립 정의
+- 기존 `## Merkle Tree 구조` 섹션의 hashPair 표 제거 → Appendix 참조로 대체
+- `## Event Architecture` 내용 보강 (EventLog 설계 의도, gidx 할당 체계, EventLog Root 신뢰 결합)
+
+#### ✅ btip-28 — 다수 개선
+
+- **페이로드 필드 설명**: `**리프 데이터**: X` → `리프 데이터는 X` (자연스러운 문장 형식)
+- **불투명 함수 명확화**:
+  - `canonical(block_id)` → `CanonicalBlockID(Hash=..., PartSetHeader=...)` 인라인 전개
+  - `marshal(CanonicalVote(...))` → `proto.marshal(CanonicalVote(...))`
+  - `decode_last_results_hash(leaf)` → `amino.unmarshal(leaf)` + 주석
+  - `unmarshal_deliver_tx(leaf)` → `proto.unmarshal(leaf, ResponseDeliverTx)` + 주석
+  - `marshal(deterministic_response_deliver_tx(r))` → `proto.marshal(ResponseDeliverTx(Code=..., Data=..., ...))` + 주석
+- **PartSetHeader 인라인화**: `block_parts_header: PartSetHeader` → `block_parts_total: Integer` + `block_parts_hash: ByteArray` (타입 정의 제거)
+- **Single-Path Trust Model 확장**: 기존 다이어그램 + [!NOTE] 뒤에 3개 `####` 섹션 추가
+  - `#### tx_event_root → LastResultsHash`: ABCIResults 계산 수식
+  - `#### LastResultsHash → block_hash`: 헤더 필드 Amino 인코딩 + RFC6962 루트
+  - `#### block_hash → Validator Signature`: CanonicalVote 직렬화 + ed25519 서명
+- **MerkleProof 링크 수정**: `[BTIP27]의 BTIP16 머클 트리` 오류 → `[BTIP16 Merkle Tree]` 직접 링크
+
+#### ✅ btip-29, 31, 32, 33 — Chaincode Interface Go 문법 교정
+
+- `func (c *Type) Method(...)` 구체 타입 메서드 문법 → `type BTIPxx interface { Method(...) }` Go 인터페이스 문법으로 전면 교체
+
+#### ✅ btip-29, 33 — targetApp → chaincodeID 용어 교정
+
+- BPrN 체인코드 컨텍스트에서는 대상 식별자가 `address` (dApp)가 아닌 `chaincodeID`
+- `targetApp` → `chaincodeID` 전체 치환 (파라미터명, 설명 텍스트, 슈도코드)
+- "애플리케이션" → "체인코드" 관련 표현 교정
+
+#### ✅ 용어 통일 — BTIP16 머클 트리
+
+- `단순 연결 방식 머클 트리` → `BTIP16 머클 트리` (btip-27, 28, 29, 31)
+- 관련 링크 참조도 `[BTIP16 Merkle Tree](./btip-16.md#appendix-btip16-merkle-tree)`로 수정
+
+#### ✅ 변수명 리팩터링 (btip-27, 28, 29, 31)
+
+| 구 용어 | 신 용어 | 변경 이유 |
+|--------|--------|----------|
+| `event_root` | `tx_event_root` | tx 레벨의 루트임을 명시 |
+| `per_event_root` | `event_attrs_root` | 이벤트 내 attributes의 루트임을 명시 |
+| `results_proof` | `tx_result_proof` | 하나의 tx 결과에 대한 증명 |
+| `header_results_proof` | `last_results_proof` | 증명 대상(LastResultsHash) 기준 명명 |
+| `event_root_proof` | `event_attrs_root_proof` | 증명 대상(event_attrs_root) 기준 명명 |
+| `event_attr_proofs` | `event_attr_proofs` | 유지 (단수형 유지) |
+
 ### 2026-04-12
 
 #### ✅ btip-16.md — 머클 트리 null 기반 처리로 변경
@@ -473,7 +536,7 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 
 | 파일 | 상태 | 현행 주요 구조 |
 |------|------|---------------|
-| `btip-16.md` | ✅ 수정 완료 | null 기반 머클 트리 패딩, hashPair 규칙 정의 |
+| `btip-16.md` | ✅ 수정 완료 | null 기반 머클 트리 패딩, `## Appendix: BTIP16 Merkle Tree` 추가, `## Event Architecture` 내용 보강 |
 | `btip-17.md` | ✅ 수정 완료 | 실패 트랜잭션 리프 null, hashPair 규칙 BTIP16 참조 |
 | `btip-19.md` | ✅ 수정 완료 | MerkleProof\<Leaf\>, mspids, cert_chains, block_commit_sigs, event_log_root_proof, event_elem_proofs |
 | `btip-20.md` | ✅ 수정 완료 | verifyProof, subgraph 다이어그램, sha256, getRootCA(mspid), 조직별 Root CA 체계 |
@@ -483,12 +546,12 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 | `btip-24.md` | ✅ 수정 완료 | BTIP24 interface (isProcessed + markProcessed) |
 | `btip-25.md` | ✅ 신규 | TransferEventElems 정의 |
 | `btip-26.md` | ✅ 신규 | BTIP26 interface (handleLinkerEvent) — dApp 콜백 인터페이스 |
-| `btip-27.md` | ✅ 신규 | BPuN Event Structure — 2단계 머클 트리(`event_attrs_root` → `tx_event_root`), Tendermint 합의 통합 |
-| `btip-28.md` | ✅ 신규 | BPuN Tx/Event Proof — 다이제스트 페이로드(`last_results_proof`, `tx_result_proof`, `event_attrs_root_proof`, `event_attr_proofs`), Validator 서명 검증 |
-| `btip-29.md` | ✅ 신규 | LinkerEndpoint Chaincode on BPrN — Gateway, `OnProof`, Go 구조체 (BTIP21 대응) |
-| `btip-31.md` | ✅ 신규 | LinkerVerifier Chaincode on BPrN — BTIP28 Step 2~6 검증 (BTIP23 대응) |
-| `btip-32.md` | ✅ 신규 | ValidatorSetRegistry Chaincode on BPrN — Validator Set 블록 높이별 보관 (BTIP22 대응) |
-| `btip-33.md` | ✅ 신규 | LinkerNullifier Chaincode on BPrN — 리플레이 방어, `sha256(txEventRoot\|\|targetApp)` (BTIP24 대응) |
+| `btip-27.md` | ✅ 신규 | BPuN Event Structure — 2단계 머클 트리, `tx_event_root` 산출까지 범위 (신뢰 체계 상세는 btip-28로 이동) |
+| `btip-28.md` | ✅ 신규 | BPuN Tx/Event Proof — Single-Path Trust Model(계산 상세 포함), 다이제스트 페이로드(`block_parts_total/hash` 인라인), 불투명 함수 명확화 |
+| `btip-29.md` | ✅ 신규 | LinkerEndpoint Chaincode on BPrN — `type BTIP29 interface`, `chaincodeID` 파라미터 (BTIP21 대응) |
+| `btip-31.md` | ✅ 신규 | LinkerVerifier Chaincode on BPrN — `type BTIP31 interface` (BTIP23 대응) |
+| `btip-32.md` | ✅ 신규 | ValidatorSetRegistry Chaincode on BPrN — `type BTIP32 interface` (BTIP22 대응) |
+| `btip-33.md` | ✅ 신규 | LinkerNullifier Chaincode on BPrN — `type BTIP33 interface`, `sha256(txEventRoot\|\|chaincodeID)` (BTIP24 대응) |
 
 ---
 
