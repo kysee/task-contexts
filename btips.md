@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-04-15
+last_updated: 2026-04-16
 ---
 
 # BTIPS 작업 컨텍스트
@@ -11,7 +11,7 @@ last_updated: 2026-04-15
 BEATOZ Linker Protocol V2의 양방향 크로스체인 증명 체계 설계.
 
 - **BPrN → BPuN 방향** (btip-16~26): BTIP19의 단일 경로 신뢰 모델 재작성, 필드명 시맨틱 교정, 제네릭 타입 표기법 도입, Proof Construction/Verification 재구성, 인터페이스 정리 등 완료.
-- **BPuN → BPrN 방향** (btip-27~28): BPuN 이벤트 구조, 2단계 머클 트리, Tendermint 합의 연계, 다이제스트 증명 페이로드 설계 완료. 변수명 직관성 리팩터링 완료.
+- **BPuN → BPrN 방향** (btip-27~34): BPuN 이벤트 구조, 2단계 머클 트리, Tendermint 합의 연계, 다이제스트 증명 페이로드 설계 완료. 변수명 직관성 리팩터링 완료. EventAttrProof 구조화 필드 도입, Nullifier eventAttrsRoot 기준 재설계 완료.
 
 ---
 
@@ -32,6 +32,7 @@ Structure MerkleProof<Leaf>:
     Property siblings: Array of ByteArray
 
 Structure TxEventProofPayload:
+    Property block_number:          Integer
     Property mspids:                Array of String
     Property cert_chains: Array of Array of ByteArray
     Property block_commit_sigs:     Array of ByteArray
@@ -45,6 +46,7 @@ Structure TxEventProofPayload:
 - `event_log_proof` → `event_log_root_proof` (event_log_root에 대한 증명임을 명시)
 - `mspids` 필드 추가 (조직별 Root CA 조회를 위한 MSP 식별자)
 - `endorser_certs_chains` → `cert_chains` (인증서 체인 자체는 endorser 여부를 의미하지 않으므로 중립적 이름으로 변경)
+- `block_number` 필드 추가 (블록 커밋 서명 입력에 포함, 크로스체인 트랜잭션 식별용)
 
 **Solidity 대응 (btip-21):**
 ```solidity
@@ -55,6 +57,7 @@ struct MerkleProof {
 }
 
 struct TxEventProof {
+    uint64        block_number;
     string[]      mspids;
     bytes[][]     cert_chains;
     bytes[]       block_commit_sigs;
@@ -66,8 +69,10 @@ struct TxEventProof {
 
 ### Commit Signature (btip-17 기준)
 
+- 서명 입력: `block_height || block_event_root` (block_height는 8바이트 big-endian)
 - 각 피어의 블록 `metadata[5]`에는 해당 피어 자신의 커밋 서명만 존재
 - n개의 서명을 수집하려면 n개의 보증 피어에게 각각 블록을 조회해야 함
+- `block_number`가 서명 입력에 포함되므로 암호학적으로 검증 가능
 
 ### 머클 트리 null 처리 규칙 (btip-16 기준)
 
@@ -105,7 +110,7 @@ Validator Set (2/3+ Voting Power)
 ### BPuNTxEventProofPayload (현행 — btip-28 기준)
 
 ```text
-Structure TendermintProof:
+Structure RFC6962Proof:
     Property total:   Integer        // RFC 6962 트리의 전체 리프 수 (분할 지점 결정에 필요)
     Property index:   Integer
     Property leaf:    ByteArray
@@ -116,22 +121,30 @@ Structure MerkleProof<Leaf>:
     Property leaf:     Leaf
     Property siblings: Array of ByteArray
 
-Structure CommitSignature:
+Structure ValidatorSignature:
     Property validator_address:  ByteArray
     Property timestamp:          Timestamp   // CanonicalVote 서명 입력에 포함됨
     Property signature:          ByteArray
+
+Structure EventAttrProof:
+    Property index:    Integer
+    Property key:      String
+    Property value:    String
+    Property siblings: Array of ByteArray
 
 Structure BPuNTxEventProofPayload:
     Property height:                   Integer
     Property chain_id:                 String
     Property round:                    Integer
     Property block_hash:               ByteArray
-    Property block_parts_header:       PartSetHeader
-    Property commit_sigs:              Array of CommitSignature
-    Property last_results_proof:       TendermintProof
-    Property tx_result_proof:          TendermintProof
+    Property block_parts_total:        Integer
+    Property block_parts_hash:         ByteArray
+    Property validator_sigs:                Array of ValidatorSignature
+    Property last_results_proof:       RFC6962Proof
+    Property tx_result_proof:          RFC6962Proof
+    Property event_type:               String
     Property event_attrs_root_proof:   MerkleProof<event_attrs_root>
-    Property event_attr_proofs:        Array of MerkleProof<attr_leaf>
+    Property event_attr_proofs:        Array of EventAttrProof
 ```
 
 **변수명 변경 이력 (2026-04-14):**
@@ -150,7 +163,7 @@ Structure BPuNTxEventProofPayload:
 | `last_results_proof` | `block_hash` | `cdcEncode(LastResultsHash)` | `sha256(0x00 \|\| leaf)` | Tendermint RFC 6962 |
 | `tx_result_proof` | `LastResultsHash` | `protobuf(Code, Data, GasWanted, GasUsed)` | `sha256(0x00 \|\| leaf)` | Tendermint RFC 6962 |
 | `event_attrs_root_proof` | `tx_event_root` | `event_attrs_root` (32B hash) | preHashed (추가 해시 없음) | BTIP27 단순 연결 |
-| `event_attr_proofs[i]` | `event_attrs_root` | `Type \|\| Key \|\| Value` (원본) | `sha256(leaf)` | BTIP27 단순 연결 |
+| `event_attr_proofs[i]` | `event_attrs_root` | `event_type \|\| key \|\| value` (구조화 필드에서 재구성) | `sha256(leaf)` | BTIP27 단순 연결 |
 
 ### 두 가지 머클 트리 유형
 
@@ -205,7 +218,7 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 - BPuN Single-Path Trust Model 정의
 - `BPuNTxEventProofPayload` 다이제스트 설계:
   - 블록 헤더 전체 대신 `block_hash` + `last_results_proof`(인덱스 11 머클 증명)
-  - Commit 전체 대신 `commit_sigs`(실제 투표한 Validator 서명만)
+  - Commit 전체 대신 `validator_sigs`(실제 투표한 Validator 서명만)
   - Validator Set 제외 (Verifier 사이드에 동기화된 상태 전제, `[!NOTE]` 인용문)
   - `CanonicalVote` 재구성에 필요한 최소 필드: `height`, `chain_id`, `round`, `block_hash`, `block_parts_header`
 - 4단계 머클 증명 경로:
@@ -241,8 +254,8 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 
 #### 설계 논의 기록
 
-- **`TendermintProof.total` 필드**: RFC 6962 머클 트리는 "n보다 작은 최대 2의 거듭제곱" 지점에서 좌우 분할하므로, 검증자가 분할 지점을 알기 위해 `total` 필요. BTIP27의 단순 연결 방식은 2의 거듭제곱까지 null 패딩하므로 불필요.
-- **`CommitSignature.timestamp` 필드**: `CanonicalVote` 서명 입력 메시지에 `timestamp`가 포함되므로, 서명 검증을 위해 각 Validator의 투표 시각이 필수.
+- **`RFC6962Proof.total` 필드**: RFC 6962 머클 트리는 "n보다 작은 최대 2의 거듭제곱" 지점에서 좌우 분할하므로, 검증자가 분할 지점을 알기 위해 `total` 필요. BTIP27의 단순 연결 방식은 2의 거듭제곱까지 null 패딩하므로 불필요.
+- **`ValidatorSignature.timestamp` 필드**: `CanonicalVote` 서명 입력 메시지에 `timestamp`가 포함되므로, 서명 검증을 위해 각 Validator의 투표 시각이 필수.
 - **Amino 인코딩 이유**: Tendermint 헤더 14개 필드가 이질적 타입(`int64`, `string`, `time.Time`, 구조체, `[]byte`)이므로, 모든 타입을 바이트로 변환하는 정규 직렬화가 필요. `[]byte` 필드에도 일괄 적용하는 이유는 타입별 분기 없는 코드 일관성.
 
 #### ✅ btip-29.md — LinkerEndpoint Chaincode on BPrN 신규 생성
@@ -252,7 +265,7 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 - Go 구조체로 `BPuNTxEventProofPayload` 전체 정의 (BTIP28 대응)
 - `OnProof`: Nullifier 검사(BTIP33) → 검증 위임(BTIP31) → 상태 기록 → 애플리케이션 이벤트 전달
 - `SetVerifierChaincodeID`, `SetNullifierChaincodeID` 관리자 함수
-- `ProofReceived`, `ProofVerified` 이벤트 정의
+- `ProofVerifiedEventElems` 이벤트 정의 (BTIP16 EventLog 형식, HLF 단일 이벤트 제약 반영)
 - Fabric 체인코드의 원자성 보장 설명 (보증 실패 시 커밋되지 않음)
 
 #### ✅ btip-31.md — LinkerVerifier Chaincode on BPrN 신규 생성
@@ -276,7 +289,7 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 #### ✅ btip-33.md — LinkerNullifier Chaincode on BPrN 신규 생성
 
 - BTIP24(LinkerNullifier on BPuN)의 BPrN 대응 문서
-- Nullifier: `sha256(txEventRoot || targetApp)` — commit_sigs 제외 (BTIP24와 동일 근거)
+- Nullifier: `sha256(eventAttrsRoot || chaincodeID)` — validator_sigs 제외 (BTIP24와 동일 근거)
 - `IsProcessed`, `MarkProcessed`, `CancelNullifier` 인터페이스
 - `CancelNullifier`: 호출자 X.509 인증서 기반 접근 제어 (BTIP24의 `msg.sender`에 대응)
 - Nullifier 대상 차이: BTIP24는 `event_root_hash`(= `event_log_root`), BTIP33은 `txEventRoot`(= `tx_event_root`)
@@ -293,6 +306,75 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 
 - **자료구조/인터페이스 표기**: BPrN 체인코드는 Go 문법으로 작성 (BPuN 스마트 컨트랙트는 Solidity)
 - **BPuN ↔ BPrN 대칭 매핑**: BTIP21↔29, BTIP22↔32, BTIP23↔31, BTIP24↔33
+
+### 2026-04-16
+
+#### ✅ btip-34.md — Chaincode Interface for Linker Protocol V2 on BPrN 신규 생성
+
+- BTIP26(BPuN dApp 콜백 인터페이스)의 BPrN 대응 문서
+- `HandleLinkerEvent(ctx, sourceAddress, eventType, keys, values)`: BTIP29가 검증 완료 후 호출하는 콜백
+- `CancelLinkerEvent(ctx, eventAttrsRoot)`: 처리된 이벤트의 Nullifier 취소 (BTIP33 호출)
+- BPuN(Solidity)은 `uint256[] index, bytes[] data` 패턴, BPrN(Go)은 `string keys[], string values[]` 패턴
+
+#### ✅ btip-28, 29, 31, 34 — EventAttrProof 구조화 필드 도입
+
+- **기존**: `MerkleProof<attr_leaf>` — 리프가 `Type||Key||Value` 바이트 연결로 파싱 모호
+- **변경**: `EventAttrProof` 구조체 도입 — `Key`, `Value`를 별도 문자열 필드로 분리
+- `event_type` 필드를 `BPuNTxEventProofPayload`에 추가
+- Verifier가 리프 해시를 `sha256(event_type || key || value)`로 재구성하여 검증
+- 연결 모호성 해결: `"ab"+"cd"+"ef"` vs `"abc"+"d"+"ef"` 문제 원천 방지
+
+#### ✅ btip-29, 33, 34 — Nullifier 기준 eventAttrsRoot로 재설계
+
+- **기존**: `sha256(txEventRoot || chaincodeID)` — 트랜잭션 레벨, 같은 tx 내 다른 이벤트 제출 차단
+- **변경**: `sha256(eventAttrsRoot || chaincodeID)` — 이벤트 레벨, 독립적 처리 가능
+- btip-33: `CalculateNullifier`, `IsProcessed`, `MarkProcessed`, `CancelNullifier` 시그니처 변경
+- btip-29: Nullifier 호출 및 이벤트 구조 `TxEventRoot` → `EventAttrsRoot` 변경
+- btip-34: `CancelLinkerEvent`의 파라미터 `eventAttrsRoot` 반영
+
+#### ✅ btip-29 — sourceAddress 파라미터 추가
+
+- `contractAddress` 속성(ABCI Event에서 `evmLogsToEvent()` 생성)을 검증된 속성에서 추출
+- BTIP34의 `HandleLinkerEvent`에 `sourceAddress` 파라미터로 전달
+- 수신 체인코드가 신뢰할 수 있는 소스 컨트랙트인지 판별 가능
+
+#### ✅ btip-31 — verify_bpun_event_proof 참조 수정
+
+- `BTIP28의 verify_bpun_event_proof` → `BTIP28의 Verification Procedure` (실존하는 섹션명으로 교정)
+
+#### ✅ btip-28 — event_attrs_root 중간값 설명 추가 및 btip-27 참조 정리
+
+- 중간값 계산 설명에 `event_attrs_root` 언급 추가
+- btip-27과 중복된 2단계 머클 트리 상세 → btip-27 참조로 갈음
+
+#### ✅ README.md — BTIP34 항목 추가
+
+#### 설계 논의 기록
+
+- **Nullifier 속성 레벨 세분화**: `eventAttrsRoot` 기준으로도 동일 이벤트 내 다른 attribute 증명 제출이 차단됨. 단, `event_attr_proofs`가 배열이므로 필요한 속성을 한 번에 제출하면 실용적으로 문제 없음. 추후 재검토 예정.
+- **BPuN→BPrN vs BPrN→BPuN 데이터 전달 방식**: BPuN(Solidity)은 `gindex + bytes` (가스 비용 최적화), BPrN(Go)은 `string keys + string values` (가스 비용 없음, 가독성 우선)
+
+#### ✅ btip-28, 29, 31, 32, 33 — 용어 변경
+
+- `TendermintProof` → `RFC6962Proof` (Tendermint 버전 의존 제거)
+- `CommitSignature`/`commit_sigs` → `ValidatorSignature`/`validator_sigs` (BPrN의 Block Commit Signature와 혼동 방지)
+- `Tendermint v0.34.x` → `Tendermint` (버전 표기 제거)
+
+#### ✅ btip-29 — ProofVerifiedEventElems 이벤트 통합
+
+- `ProofReceived` + `ProofVerified` 두 이벤트 → `ProofVerifiedEventElems` 하나로 통합
+- HLF 트랜잭션당 단일 이벤트 제약(SetEvent) 반영
+- BTIP16 EventLog 형식 준수: `evtlog_id = "ProofVerifiedEventElems"`, `selector = sha256("ProofVerifiedEventElems(bytes,string)")`
+- elems: `[event_attrs_root (bytes), chaincodeID (string)]`
+
+#### ✅ btip-17, 19, 20, 21, 23 — Block Commit Signature에 block_height 추가
+
+- btip-17: 서명 입력 변경 `Sign(PrivKey, block_event_root)` → `Sign(PrivKey, block_height || block_event_root)`
+- btip-19: `TxEventProofPayload`에 `block_number` 필드 추가, Step 4 서명 검증 로직 수정
+- btip-21: `TxEventProof` Solidity 구조체에 `uint64 block_number` 추가
+- btip-23: `beatoz_p256Verify` 설명에 `block_height || block_event_root` 서명 원문 반영
+- btip-20: 블록 커밋 서명 검증 설명 업데이트
+- 양방향 `(block_number, tx_index)` 기반 크로스체인 트랜잭션 식별 체계 확보
 
 ### 2026-04-15
 
@@ -537,10 +619,10 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 | 파일 | 상태 | 현행 주요 구조 |
 |------|------|---------------|
 | `btip-16.md` | ✅ 수정 완료 | null 기반 머클 트리 패딩, `## Appendix: BTIP16 Merkle Tree` 추가, `## Event Architecture` 내용 보강 |
-| `btip-17.md` | ✅ 수정 완료 | 실패 트랜잭션 리프 null, hashPair 규칙 BTIP16 참조 |
-| `btip-19.md` | ✅ 수정 완료 | MerkleProof\<Leaf\>, mspids, cert_chains, block_commit_sigs, event_log_root_proof, event_elem_proofs |
-| `btip-20.md` | ✅ 수정 완료 | verifyProof, subgraph 다이어그램, sha256, getRootCA(mspid), 조직별 Root CA 체계 |
-| `btip-21.md` | ✅ 수정 완료 | BTIP21 interface, string[] mspids, bytes[][] cert_chains, BTIP26 참조 섹션 |
+| `btip-17.md` | ✅ 수정 완료 | 실패 트랜잭션 리프 null, hashPair 규칙 BTIP16 참조, `Sign(PrivKey, block_height \|\| block_event_root)` |
+| `btip-19.md` | ✅ 수정 완료 | MerkleProof\<Leaf\>, block_number, mspids, cert_chains, block_commit_sigs, event_log_root_proof, event_elem_proofs |
+| `btip-20.md` | ✅ 수정 완료 | verifyProof, subgraph 다이어그램, sha256, getRootCA(mspid), 조직별 Root CA 체계, `block_height \|\| block_event_root` 서명 검증 |
+| `btip-21.md` | ✅ 수정 완료 | BTIP21 interface, uint64 block_number, string[] mspids, bytes[][] cert_chains, BTIP26 참조 섹션 |
 | `btip-22-xx.md` | ⚠️ 미수정 | 조직별 Root CA 매핑 반영 필요 |
 | `btip-23.md` | ✅ 수정 완료 | BTIP23 interface (verifyProof + setPolicyContract), getRootCA(mspid) |
 | `btip-24.md` | ✅ 수정 완료 | BTIP24 interface (isProcessed + markProcessed) |
@@ -548,10 +630,11 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 | `btip-26.md` | ✅ 신규 | BTIP26 interface (handleLinkerEvent) — dApp 콜백 인터페이스 |
 | `btip-27.md` | ✅ 신규 | BPuN Event Structure — 2단계 머클 트리, `tx_event_root` 산출까지 범위 (신뢰 체계 상세는 btip-28로 이동) |
 | `btip-28.md` | ✅ 신규 | BPuN Tx/Event Proof — Single-Path Trust Model(계산 상세 포함), 다이제스트 페이로드(`block_parts_total/hash` 인라인), 불투명 함수 명확화 |
-| `btip-29.md` | ✅ 신규 | LinkerEndpoint Chaincode on BPrN — `type BTIP29 interface`, `chaincodeID` 파라미터 (BTIP21 대응) |
-| `btip-31.md` | ✅ 신규 | LinkerVerifier Chaincode on BPrN — `type BTIP31 interface` (BTIP23 대응) |
+| `btip-29.md` | ✅ 수정 완료 | LinkerEndpoint Chaincode on BPrN — `type BTIP29 interface`, `EventAttrProof` 구조체, `sourceAddress` 추출, `eventAttrsRoot` 기준 Nullifier (BTIP21 대응) |
+| `btip-31.md` | ✅ 수정 완료 | LinkerVerifier Chaincode on BPrN — `type BTIP31 interface`, `sha256(EventType+Key+Value)` 리프 재구성 (BTIP23 대응) |
 | `btip-32.md` | ✅ 신규 | ValidatorSetRegistry Chaincode on BPrN — `type BTIP32 interface` (BTIP22 대응) |
-| `btip-33.md` | ✅ 신규 | LinkerNullifier Chaincode on BPrN — `type BTIP33 interface`, `sha256(txEventRoot\|\|chaincodeID)` (BTIP24 대응) |
+| `btip-33.md` | ✅ 수정 완료 | LinkerNullifier Chaincode on BPrN — `type BTIP33 interface`, `sha256(eventAttrsRoot\|\|chaincodeID)` (BTIP24 대응) |
+| `btip-34.md` | ✅ 신규 | Chaincode Interface for Linker Protocol V2 on BPrN — `HandleLinkerEvent(sourceAddress, eventType, keys, values)` (BTIP26 대응) |
 
 ---
 
@@ -586,7 +669,7 @@ def verify_event_proof(payload: TxEventProofPayload):
 
 ### 프로토콜 구조
 - **BPrN**: Hyperledger Fabric 기반 프라이빗 네트워크
-- **BPuN**: Tendermint/DPoS 기반 퍼블릭 네트워크 (소스: `beatoz-go`, Tendermint v0.34.24 포크)
+- **BPuN**: Tendermint/DPoS 기반 퍼블릭 네트워크 (소스: `beatoz-go`, Tendermint 포크)
 - **BEATOZ Linker Protocol V2**: 양방향 크로스체인 이벤트 전달 프로토콜
   - BPrN → BPuN: PKI 기반 (btip-16~26)
   - BPuN → BPrN: PoS 합의 기반 (btip-27~28)
@@ -614,6 +697,7 @@ BPrN → BPuN 방향:
 
 BPuN → BPrN 방향:
   btip27 ← btip28 ← btip29 (LinkerEndpoint)
+                         ← btip34 (dApp 콜백 인터페이스)
                     ← btip31 (LinkerVerifier)
                          ← btip32 (ValidatorSetRegistry)
                     ← btip33 (LinkerNullifier)
@@ -623,4 +707,5 @@ BPuN ↔ BPrN 대칭 매핑:
   BTIP22 (LinkerPolicy on BPuN)     ↔ BTIP32 (ValidatorSetRegistry on BPrN)
   BTIP23 (LinkerVerifier on BPuN)   ↔ BTIP31 (LinkerVerifier on BPrN)
   BTIP24 (LinkerNullifier on BPuN)  ↔ BTIP33 (LinkerNullifier on BPrN)
+  BTIP26 (dApp Interface on BPuN)   ↔ BTIP34 (Chaincode Interface on BPrN)
 ```
