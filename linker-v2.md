@@ -1,6 +1,6 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-04-20 (3차) — BTIP 문서 변경사항 반영
+> 마지막 업데이트: 2026-04-20 (4차) — Gas 최적화 (1.77M → ~420K, -76%)
 
 ---
 
@@ -313,3 +313,228 @@ LinkerEndpoint (BTIP21)
 
 ### 2026-04-08 (1차)
 - 초기 계약 구현 + NestJS Prover API 스캐폴딩
+
+---
+
+## 2026-04-20 (4차) — Gas 최적화 (1.77M → ~420K, -76%)
+
+### 배경
+
+`submit-proof.ts` 실행 시 BEATOZ localnet에서 측정한 gas 사용량이 **1,767,144 gas** — cross-chain proof 제출 치고는 높아 보여서 프로파일링 및 최적화 진행.
+
+최초 추측(precompile이 주범)은 **틀림**. beatoz-go의 실제 precompile 비용:
+- `P256Verify` (0x0100): **6,900 gas** (EIP-7212)
+- `X509Verify` (0xff00): **50,000 + 50,000 × n(cert)** = 100K/1cert
+- 합계: **~107K gas (전체의 6%)**
+
+나머지 **~1.66M은 전적으로 Solidity 실행 비용**이었음 → 컨트랙트 차원 최적화가 필요.
+
+### Gas 프로파일링 환경 구축 (Foundry)
+
+BEATOZ가 Ethereum JSON-RPC(`eth_call`, `eth_getCode`)나 `debug_traceTransaction`을 구현하지 않기 때문에 **Forge의 로컬 revm 환경**에서 mock precompile로 Solidity 실행 gas를 측정.
+
+**추가된 파일**:
+- `verifier/on-bpun/foundry.toml` — src/test 경로, solc 0.8.28, cancun EVM
+- `verifier/on-bpun/remappings.txt` — `@openzeppelin`, `forge-std` → `node_modules/`
+- `verifier/on-bpun/test-forge/LinkerGasTest.t.sol` — 컨트랙트 배포 + 정책 설정 + onProof 호출
+- `verifier/on-bpun/test-forge/mocks/MockP256Verify.sol` — `fallback` 에서 `true32Byte` 반환
+- `verifier/on-bpun/test-forge/mocks/MockX509Verify.sol` — `[pubkeyX][pubkeyY][serialNo]["peer"]` 반환
+- `.gitignore` 에 `/out-forge`, `/cache-forge`, `/broadcast` 추가
+
+**사용법**:
+```bash
+# foundry 설치 후
+forge test --match-contract LinkerGasTest --gas-report
+forge test -vvvv   # 호출 트리 + per-call gas
+```
+
+**주의**: revm에는 BEATOZ 커스텀 precompile이 없어 `vm.etch()`로 mock 바이트코드를 해당 주소에 심어서 `staticcall` 이 성공하게 함. Mock precompile의 gas 비용은 실제와 다르지만 Solidity 측 실행 비용은 정확히 측정됨.
+
+### 적용한 최적화 (컨트랙트)
+
+#### 1. `_encodeCert` 리팩토링 (🏆 가장 큰 효과 — 단일 변경으로 -590K gas)
+
+**Before**: [LinkerVerifier.sol:157-171] byte-by-byte 루프로 cert(529B) + rootCA(~560B)를 memory buffer에 복사. calldata→memory 암묵적 복사까지 두 번 일어남.
+```solidity
+for (uint256 i = 0; i < len; i++) {
+    buf[offset + 4 + i] = cert[i];  // MSTORE8 × len
+}
+```
+
+**After**: 두 개의 helper로 분리 + assembly
+```solidity
+function _encodeCertCalldata(bytes memory buf, uint256 offset, bytes calldata cert) ...
+    // calldatacopy로 한 번에 복사 (O(1))
+function _encodeCertMemory(bytes memory buf, uint256 offset, bytes memory cert) ...
+    // mcopy로 한 번에 복사 (EIP-5656, Cancun)
+```
+
+**OU 복사 루프도 `mcopy` 로 교체** (같은 패턴이 149-151 라인에 있었음).
+
+#### 2. A: `checkAndMark` 결합 (`LinkerNullifier` + `LinkerEndpoint`)
+
+- `IBTIP24.checkAndMark(bytes32, address) returns (bool wasDup)` 추가
+- `LinkerEndpoint.onProof`에서 `isProcessed` + `markProcessed` 2회 외부 호출 → 1회로 통합
+- verify 실패 시 state change는 tx revert로 자동 롤백되므로 순서를 바꿔도 안전
+- 절감: sha256 1회, 외부 호출 1회, 중복 SLOAD 1회
+
+#### 3. B: `_checkEndorsementPolicy` 해시 캐싱
+
+- Nested loop에서 매 반복마다 `keccak256(endorsers[j].ou)` 와 `keccak256(requiredOUs[i])` 재계산 하던 것을 루프 밖에서 1회 계산 후 캐시
+- endorser 수 N, required OU 수 M → 재계산 O(N×M) → O(N+M)
+
+#### 4. C: `getEndorsementPolicy` typed return (`IBTIP22`)
+
+- Before: `returns (bytes memory)` 후 caller에서 `abi.decode` — 라운드트립 발생
+- After: `returns (uint256 minEndorsers, bytes[] memory requiredOUs)` 직접 반환
+- 절감: `abi.encode` + `abi.decode` ~3-5K gas
+
+#### 5. D: `getRootCAAndCRL` 결합 getter (`IBTIP22`)
+
+- `getRootCA` + `getCRL` 2회 external call → 1회로 통합
+- `LinkerVerifier._verifyCertChains` 에서 per-endorser external call 1회 감소
+
+#### 6. E: P256 input 버퍼 재사용 (`_verifyCommitSignatures`)
+
+- Before: `bytes memory input = abi.encodePacked(...)` 를 매 endorser마다 재할당 (160B)
+- After: loop 밖에서 160B 버퍼 1회 할당, `msgHash` 미리 쓰기, loop 안에서 `calldatacopy` + `mstore`로 `[32:96]`, `[96:128]`, `[128:160]` 만 갱신
+- endorser 수에 선형 비례하는 절감
+
+### MockDApp 완전 재설계 (-700K gas 추가 절감)
+
+trace로 발견: `handleLinkerEvent` 하나가 전체 `onProof` gas의 **~82%(766K)** 를 차지. 원인은 `_events.push(LinkerEvent{...})` 에서 대형 struct를 storage에 쓰는 것(특히 `encoded` bytes ~500B → 20K gas × ~16 slots).
+
+**최종 형태 (storage 없이 event emit만)**:
+```solidity
+event LinkerProofReceived(
+    uint64 indexed srcBlockNumber,
+    uint64 indexed srcTxIndex,
+    uint256[] indices,     // non-indexed
+    bytes[] values         // non-indexed
+);
+
+function handleLinkerEvent(...) external override {
+    emit LinkerProofReceived(srcBlockNumber, srcTxIndex, indices, values);
+}
+```
+
+**제거된 것**:
+- `struct LinkerEvent`, `_events[]` storage array
+- `eventCount()`, `getEvent()`, `getEncoded()`, `getAllEncoded()`
+- 구 event 이름 `LinkerEventReceived` → `LinkerProofReceived`로 변경
+
+**근거**: Event data 비용은 **8 gas/byte (non-indexed)** 로 storage SSTORE(20K/slot) 대비 **수백 배 싸다**. On-chain 읽기가 필요 없는 데이터는 항상 event가 맞다.
+
+**Indexed 주의사항**: 32바이트 초과 가변 데이터(`bytes`, `string`)를 indexed로 선언하면 topic에 keccak256 해시만 저장되고 **원본은 소실**. `indices`/`values` 같은 페이로드는 반드시 non-indexed여야 함.
+
+### submit-proof.ts 이벤트 파싱 로직 추가
+
+BEATOZ는 각 EVM 로그를 Cosmos 이벤트로 래핑하며 `/tx` RPC 응답에서는 **키/값이 모두 base64**로 인코딩됨:
+- `type = "evm"`
+- attributes: `contractAddress`, `topic.0`, `topic.1`, ..., `data`, `blockNumber`, `removed`
+- 값 디코드 예: `dG9waWMuMA==` → `topic.0`, `0x...` hex는 대문자 + `0x` prefix 없이 저장
+
+**추가된 helper 함수**:
+- `b64decode(s)` — base64 패턴이면 디코드, 아니면 pass-through (SDK가 이미 디코드한 경우도 처리)
+- `to0xHex(s)` — `0x` prefix 보장, 소문자화
+- `eventSignatureHash(abi)` — `keccak256("Name(type1,type2,...)")`
+- `decodeLinkerProofReceived(events, abi)` — type="evm" 중 topic[0]이 일치하는 로그 찾아 `web3.beatoz.abi.decodeLog` 로 디코드
+- `numericValues(x)` — web3.js의 `{0:..., 1:..., __length__: n}` 형태에서 숫자 키만 추출
+
+**출력 예시**:
+```
+--- LinkerProofReceived ---
+  srcBlockNumber: 3
+  srcTxIndex:     0
+  indices:        [4, 5, 6, 7]
+  values:
+    [0] idx=4  0x0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a0a
+    [1] idx=5  0x0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b
+    [2] idx=6  0x3039
+    [3] idx=7  0x49742069732061205472616e736665724576656e744c6f67
+```
+
+(`[3]`은 ASCII "It is a TransferEventLog"의 hex)
+
+### `query-dapp.ts` 제거
+
+MockDApp에서 storage를 제거했으므로 `getEvent` / `getEncoded` 등 불가능. 대신 `submit-proof.ts` 내부에서 tx.deliver_tx.events 파싱하여 출력.
+
+### 인터페이스 변경 요약
+
+| 파일 | 변경 |
+|------|------|
+| `IBTIP22.sol` | `getEndorsementPolicy()` 반환 타입 `bytes` → `(uint256, bytes[])`; `getRootCAAndCRL(mspId)` 결합 getter 추가 |
+| `IBTIP24.sol` | `checkAndMark(bytes32, address) returns (bool wasDup)` 추가 (기존 `isProcessed`/`markProcessed` 유지) |
+| `MockDApp.sol` | 이벤트 이름 `LinkerEventReceived` → `LinkerProofReceived`, `indices`/`values` non-indexed로 추가, `LinkerEvent` struct 및 storage 완전 제거 |
+| `LinkerEndpoint.sol` | `checkAndMark` 사용으로 flow 단순화 |
+| `LinkerVerifier.sol` | `_encodeCertCalldata` / `_encodeCertMemory` 분리, OU/정책 해시 캐싱, P256 버퍼 재사용 |
+
+### 최종 Gas 측정
+
+| 단계 | BEATOZ 실측 | Forge (revm) | 주요 변경 |
+|------|------------|-------------|-----------|
+| 원본 | **1,767,144** | 1,360,249 | — |
+| #1 (calldatacopy/mcopy) + MockDApp struct 원본 | **1,177,614** | 985,493 | `_encodeCert` assembly |
+| A~E 전체 + MockDApp event-only | **~420,000** | 226,323 → 197,760 | 전체 최적화 스택 적용 |
+
+**절감: 1,347,144 gas (-76.2%)**
+
+Forge vs BEATOZ 차이 (~190K) 내역:
+- Intrinsic (21K) + Calldata (~45K) + 실제 precompile(~107K, mock 대비) + Cosmos-layer 오버헤드(~20K)
+
+### 비교 (타 cross-chain 프로토콜)
+
+| 프로토콜 | Verification gas |
+|---------|-----------------|
+| Tendermint Light Client (직접) | >10M |
+| ENS DNSSEC-Oracle (구 X.509) | ~2M |
+| **Linker V2 (최적화 전)** | **1.77M** |
+| Wormhole (20 guardian) | ~1.35M |
+| **Linker V2 (최적화 후)** | **~420K** ✅ |
+| Axelar GMP | ~700K |
+| ZK Groth16 verifier | ~500K |
+| Optimism fraud proof | ~40K (오프체인 의존) |
+
+### 파일 변경 목록
+
+**컨트랙트** (`verifier/on-bpun/contracts/`):
+- `LinkerEndpoint.sol` — `checkAndMark` 사용
+- `LinkerNullifier.sol` — `checkAndMark` 추가
+- `LinkerVerifier.sol` — `_encodeCert` 분리/assembly, 해시 캐싱, P256 버퍼 재사용
+- `LinkerPolicy.sol` — `getEndorsementPolicy` 반환 타입, `getRootCAAndCRL` 추가
+- `MockDApp.sol` — storage/struct 제거, `LinkerProofReceived` 이벤트
+- `interfaces/IBTIP22.sol` — typed 반환, combined getter
+- `interfaces/IBTIP24.sol` — `checkAndMark`
+
+**스크립트** (`verifier/on-bpun/scripts/beatoz/`):
+- `submit-proof.ts` — gas 로그 + 이벤트 파싱/출력 추가
+- `query-dapp.ts` — 삭제 (MockDApp 대응 메서드 없음)
+
+**Foundry 환경** (신규):
+- `verifier/on-bpun/foundry.toml`
+- `verifier/on-bpun/remappings.txt`
+- `verifier/on-bpun/test-forge/LinkerGasTest.t.sol`
+- `verifier/on-bpun/test-forge/mocks/MockP256Verify.sol`
+- `verifier/on-bpun/test-forge/mocks/MockX509Verify.sol`
+
+**기타**:
+- `.gitignore` — `/out-forge`, `/cache-forge`, `/broadcast`
+
+### 향후 추가 최적화 여지
+
+1. **Calldata 감소** — proof payload(~3KB) 자체가 calldata 비용 ~45K gas 소비. cert를 on-chain 저장/캐시하거나 ZK proof로 대체 시 큰 감소
+2. **X509 precompile 호출 캐싱** — 같은 endorser cert를 반복 검증 중이라면 pubkey/OU를 저장해 skip
+3. **Event 추가 슬림화** — `LinkerProofReceived`의 `values` 가 대형이면 외부 indexer에 위임하고 최소 필드만 emit
+
+### 관련 참고 사항 (Key Insights)
+
+- **BEATOZ는 Ethereum JSON-RPC 미구현** → `forge --fork-url` 불가
+- **BEATOZ는 `debug_traceTransaction` 미구현** → 실 노드에서 per-call gas breakdown 불가
+- **Hardhat v3 + `hardhat-gas-reporter` 비호환** (v3가 Mocha 대신 `node:test` 사용)
+- **macOS에서 forge 설치 시 `libusb` 필수** (`brew install libusb`) — USB wallet 미사용이어도 dylib 로드 실패
+- **`mcopy` opcode (EIP-5656)** 는 Cancun부터 지원, solc 0.8.24+ 에서 기본 활성화, BEATOZ도 지원 확인(`PrecompiledContractsCancun`에 등록됨)
+- **Solidity 반환값은 `calldata` 불가** — 외부 호출의 returndata는 언어/EVM 레벨에서 반드시 memory로 복사됨
+- **Event 비용**: 기본 375 gas + topic당 375 gas + 바이트당 8 gas; storage 대비 ~80배 저렴
+- **Indexed 대형 데이터 금기**: `bytes`/`string`/struct을 indexed로 하면 keccak 해시만 저장되고 원본 소실
+
