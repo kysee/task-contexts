@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-04-16
+last_updated: 2026-04-20
 ---
 
 # BTIPS 작업 컨텍스트
@@ -11,7 +11,7 @@ last_updated: 2026-04-16
 BEATOZ Linker Protocol V2의 양방향 크로스체인 증명 체계 설계.
 
 - **BPrN → BPuN 방향** (btip-16~26): BTIP19의 단일 경로 신뢰 모델 재작성, 필드명 시맨틱 교정, 제네릭 타입 표기법 도입, Proof Construction/Verification 재구성, 인터페이스 정리 등 완료.
-- **BPuN → BPrN 방향** (btip-27~34): BPuN 이벤트 구조, 2단계 머클 트리, Tendermint 합의 연계, 다이제스트 증명 페이로드 설계 완료. 변수명 직관성 리팩터링 완료. EventAttrProof 구조화 필드 도입, Nullifier eventAttrsRoot 기준 재설계 완료.
+- **BPuN → BPrN 방향** (btip-27~34): BPuN 이벤트 구조, 2단계 머클 트리, Tendermint 합의 연계, 다이제스트 증명 페이로드 설계 완료. 변수명 직관성 리팩터링 완료. EventAttrProof 제거(MerkleProof로 통합), Nullifier eventAttrsRoot 기준 재설계 완료.
 
 ---
 
@@ -27,7 +27,7 @@ Root CA → 인증서 체인 → 블록 커밋 서명 → block_event_root → e
 
 ```text
 Structure MerkleProof<Leaf>:
-    Property gindex:   Integer
+    Property index:    Integer
     Property leaf:     Leaf
     Property siblings: Array of ByteArray
 
@@ -126,12 +126,6 @@ Structure ValidatorSignature:
     Property timestamp:          Timestamp   // CanonicalVote 서명 입력에 포함됨
     Property signature:          ByteArray
 
-Structure EventAttrProof:
-    Property index:    Integer
-    Property key:      String
-    Property value:    String
-    Property siblings: Array of ByteArray
-
 Structure BPuNTxEventProofPayload:
     Property height:                   Integer
     Property chain_id:                 String
@@ -142,9 +136,8 @@ Structure BPuNTxEventProofPayload:
     Property validator_sigs:                Array of ValidatorSignature
     Property last_results_proof:       RFC6962Proof
     Property tx_result_proof:          RFC6962Proof
-    Property event_type:               String
     Property event_attrs_root_proof:   MerkleProof<event_attrs_root>
-    Property event_attr_proofs:        Array of EventAttrProof
+    Property event_attr_proofs:        Array of MerkleProof<attr_value>
 ```
 
 **변수명 변경 이력 (2026-04-14):**
@@ -163,7 +156,7 @@ Structure BPuNTxEventProofPayload:
 | `last_results_proof` | `block_hash` | `cdcEncode(LastResultsHash)` | `sha256(0x00 \|\| leaf)` | Tendermint RFC 6962 |
 | `tx_result_proof` | `LastResultsHash` | `protobuf(Code, Data, GasWanted, GasUsed)` | `sha256(0x00 \|\| leaf)` | Tendermint RFC 6962 |
 | `event_attrs_root_proof` | `tx_event_root` | `event_attrs_root` (32B hash) | preHashed (추가 해시 없음) | BTIP27 단순 연결 |
-| `event_attr_proofs[i]` | `event_attrs_root` | `event_type \|\| key \|\| value` (구조화 필드에서 재구성) | `sha256(leaf)` | BTIP27 단순 연결 |
+| `event_attr_proofs[i]` | `event_attrs_root` | `value` (속성값 raw bytes) | `sha256(value)` | BTIP27 단순 연결 |
 
 ### 두 가지 머클 트리 유형
 
@@ -307,6 +300,90 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 - **자료구조/인터페이스 표기**: BPrN 체인코드는 Go 문법으로 작성 (BPuN 스마트 컨트랙트는 Solidity)
 - **BPuN ↔ BPrN 대칭 매핑**: BTIP21↔29, BTIP22↔32, BTIP23↔31, BTIP24↔33
 
+### 2026-04-20
+
+#### ✅ btip-27 — Leaf 해시 단순화: `sha256(event_type || key || value)` → `sha256(value)`
+
+- 리프 데이터를 `Attribute.Value`만으로 변경, `Event.Type`과 `Attribute.Key` 제거
+- 속성의 의미는 머클 트리 내 인덱스(위치)에 의해 결정 (BTIP16 gindex 패턴과 통일)
+- 이벤트 타입 식별: EVM의 `topic.0` (keccak256 시그니처)가 별도 leaf로 존재하여 머클 증명 가능
+- 소스 컨트랙트 식별: `contractAddress`가 별도 attribute(index 0)로 존재하여 머클 증명 가능
+- 보안상 문제 없음: 의미 결정 정보가 모두 트리 내 별도 leaf로 존재
+
+#### ✅ btip-28 — EventAttrProof 단순화 및 event_type 필드 제거
+
+- `EventAttrProof`: `key` 필드 제거, `value`를 `ByteArray`(raw bytes)로 변경
+- `BPuNTxEventProofPayload`: `event_type` 필드 제거 (이벤트 타입은 `topic.0`으로 식별)
+- Proof Construction: `attr_leaves = [attr.Value for attr in ...]`로 변경
+- Verification Step 6: `sha256(value)`로 리프 해시 재구성
+- Leaf Data Summary 테이블 갱신
+
+#### ✅ btip-31 — LinkerVerifier leaf 해시 변경
+
+- Step 6: `sha256(payload.EventType + proof.Key + proof.Value)` → `sha256(proof.Value)`
+
+#### ✅ btip-29 — Go 구조체 및 OnProof 변경
+
+- `EventAttrProof`: `Key` 필드 제거, `Value`를 `[]byte`로 변경
+- `BPuNTxEventProofPayload`: `EventType` 필드 제거
+- `OnProof`: HandleLinkerEvent 호출을 `(chainId, blockNumber, txIndex, indices, values)` 형태로 변경
+
+#### ✅ btip-26, btip-34 — 통합 HandleLinkerEvent 인터페이스 재정의
+
+- **양방향 통합 인터페이스**: `HandleLinkerEvent(blockNumber, txIndex, indices[], values[])` — chainId는 별도 파라미터가 아닌 indices/values 내 필수 인덱스로 전달
+- btip-26 (Solidity): `function handleLinkerEvent(uint64 blockNumber, uint64 txIndex, uint256[] indices, bytes[] values)`
+- btip-34 (Go): `HandleLinkerEvent(ctx, blockNumber uint64, txIndex uint64, indices []uint64, values [][]byte)`
+- **이벤트 출처 정보** 인용문 추가 (강제가 아닌 가이드 톤):
+  - BPuN→BPrN: `index 0` (contractAddress), `index 1` (topic.0). chain_id는 CanonicalVote 서명으로 검증되므로 별도 인덱스 불필요.
+  - BPrN→BPuN: EventLog Header `channel_id`, `chaincode_id`, `selector` (각 gindex로 머클 증명 가능)
+  - 논조: "출처 신뢰가 필요한 경우 Prover에게 해당 증명을 포함시키고 dApp/체인코드에서 확인해야 한다"
+
+#### ✅ btip-21 — onProof handleLinkerEvent 호출 변경
+
+- `handleLinkerEvent(event_type, indices, data)` → `handleLinkerEvent(block_number, tx_index, indices, data)`
+- `blockNumber`: payload에서, `txIndex`: gindex→leaf index 변환, chainId는 별도 파라미터 아님
+
+#### ✅ btip-27 — EVM 이벤트 순서 NOTE 제거
+
+- EVM 이벤트(`"evm"`)가 기본 이벤트(`"tx"`)보다 먼저 추가된다는 `[!NOTE]` 블록 삭제 (불필요)
+
+#### ✅ btip-28, 29, 31 — EventAttrProof 제거, MerkleProof로 통합
+
+- `EventAttrProof` 구조체 정의 제거 (btip-28의 Proof Data Structures에서 삭제)
+- `EventAttrProof` Go struct 제거 (btip-29의 Data Structures에서 삭제)
+- 페이로드 필드: `Array of EventAttrProof` → `Array of MerkleProof<attr_value>`
+- 모든 필드 참조 변경: `proof.value`/`proof.Value` → `proof.leaf`/`proof.Leaf`
+- 설명 텍스트, 주석, Leaf Data Summary 테이블 갱신
+- 근거: key 제거 후 EventAttrProof(index, value, siblings)는 MerkleProof(index, leaf, siblings)와 구조적으로 동일
+
+#### ✅ btip-26, 34 — 보안 필수 인덱스 → 이벤트 출처 정보 톤 변경
+
+- "보안 필수 인덱스" 제목을 "이벤트 출처 정보"로 변경
+- 강제적 톤("반드시 포함/거부") → 가이드 톤("출처 신뢰가 필요한 경우 Prover에게 포함시키고 확인해야 한다")
+
+#### ✅ btip-34, 29 — HandleLinkerEvent에 chainId 파라미터 추가
+
+- BPuN→BPrN 방향: `chainId`를 HandleLinkerEvent 첫 번째 파라미터로 추가
+- 근거: BPuN ABCI 이벤트에는 BPrN EventLog Header의 `channel_id`(gidx:0)에 대응하는 네트워크 식별 필드가 Per-Event Tree에 없음. 모든 이벤트에 중복 추가하는 것도 비효율적. CanonicalVote 서명으로 블록 레벨에서 검증된 `payload.ChainID`를 LinkerEndpoint가 별도 파라미터로 전달
+- btip-34: `HandleLinkerEvent(ctx, srcChainId, srcBlockNumber, srcTxIndex, indices, values)`
+- btip-29 OnProof: `chain_id = payload.ChainID` 추출 후 전달
+- btip-26(BPrN→BPuN)은 변경 없음 — `channel_id`가 EventLog Header gidx:0에 있어 indices/values로 전달 가능
+- 양방향 HandleLinkerEvent 시그니처 비대칭은 두 방향의 이벤트 아키텍처 차이에서 비롯되는 필연적 결과
+
+#### ✅ 전체 — gindex → gidx 통일, MerkleProof 필드 index 통일
+
+- `gindex` 약칭을 btip-16에서 정의한 `gidx`로 전체 통일 (btip-16, 19, 20, 21, 25, 26, 27, 29)
+- MerkleProof 구조체 필드: `gindex` → `index` (btip-19, 21). btip-28은 이미 `index` 사용 중이었으므로 양방향 일관성 확보
+- 코드 내 `.gindex` 참조 → `.index`로 변경 (btip-19 코드, btip-21 코드, btip-20 설명)
+- `gindex_to_leaf_index()` → `to_leaf_index()` (btip-21)
+
+#### 설계 논의 기록
+
+- **event_type 암호학적 신뢰 불필요**: `targetDApp`과 동일한 신뢰 수준(Prover 신뢰)으로 충분. BPrN→BPuN은 프라이빗 환경이므로 더욱 문제 없음. BPuN→BPrN은 `topic.0`이 이벤트 시그니처로서 별도 leaf에 존재.
+- **소스 컨트랙트 식별**: 양방향 모두 머클 트리 내에 소스 식별 정보 존재. BPrN: `chaincode_id`(EventLog header gidx), BPuN: `contractAddress`(ABCI event attribute index 0). beatoz-go `evmLogsToEvent()`에서 확인 완료.
+- **네트워크 식별**: BPrN→BPuN: `channel_id`(EventLog header gidx), BPuN→BPrN: `chain_id`(CanonicalVote 서명으로 블록 레벨 검증, 별도 인덱스 불필요). `chainId`는 별도 파라미터가 아닌 `indices/values` 내 출처 정보 또는 블록 레벨 검증으로 처리.
+- **BPuN EVM 이벤트 attribute 구조 (beatoz-go 확인)**: `contractAddress`(index 0), `topic.0`(index 1), `topic.N`(index 1+N), `data`, `blockNumber`, `removed`
+
 ### 2026-04-16
 
 #### ✅ btip-34.md — Chaincode Interface for Linker Protocol V2 on BPrN 신규 생성
@@ -352,7 +429,7 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 #### 설계 논의 기록
 
 - **Nullifier 속성 레벨 세분화**: `eventAttrsRoot` 기준으로도 동일 이벤트 내 다른 attribute 증명 제출이 차단됨. 단, `event_attr_proofs`가 배열이므로 필요한 속성을 한 번에 제출하면 실용적으로 문제 없음. 추후 재검토 예정.
-- **BPuN→BPrN vs BPrN→BPuN 데이터 전달 방식**: BPuN(Solidity)은 `gindex + bytes` (가스 비용 최적화), BPrN(Go)은 `string keys + string values` (가스 비용 없음, 가독성 우선)
+- **양방향 통합 데이터 전달 방식**: `(indices[], values[])` 패턴으로 양방향 통일. 속성의 의미는 인덱스가 결정 (BPrN: gindex, BPuN: attr index). 이전의 `keys[]` + `values[]` 패턴에서 변경됨.
 
 #### ✅ btip-28, 29, 31, 32, 33 — 용어 변경
 
@@ -620,21 +697,21 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 |------|------|---------------|
 | `btip-16.md` | ✅ 수정 완료 | null 기반 머클 트리 패딩, `## Appendix: BTIP16 Merkle Tree` 추가, `## Event Architecture` 내용 보강 |
 | `btip-17.md` | ✅ 수정 완료 | 실패 트랜잭션 리프 null, hashPair 규칙 BTIP16 참조, `Sign(PrivKey, block_height \|\| block_event_root)` |
-| `btip-19.md` | ✅ 수정 완료 | MerkleProof\<Leaf\>, block_number, mspids, cert_chains, block_commit_sigs, event_log_root_proof, event_elem_proofs |
-| `btip-20.md` | ✅ 수정 완료 | verifyProof, subgraph 다이어그램, sha256, getRootCA(mspid), 조직별 Root CA 체계, `block_height \|\| block_event_root` 서명 검증 |
-| `btip-21.md` | ✅ 수정 완료 | BTIP21 interface, uint64 block_number, string[] mspids, bytes[][] cert_chains, BTIP26 참조 섹션 |
+| `btip-19.md` | ✅ 수정 완료 | MerkleProof\<Leaf\> (`index` 필드), block_number, mspids, cert_chains, block_commit_sigs, event_log_root_proof, event_elem_proofs |
+| `btip-20.md` | ✅ 수정 완료 | verifyProof, subgraph 다이어그램, sha256, getRootCA(mspid), 조직별 Root CA 체계, `.index` 필드 참조 |
+| `btip-21.md` | ✅ 수정 완료 | BTIP21 interface, MerkleProof `index` 필드, `handleLinkerEvent(srcBlockNumber, srcTxIndex, indices, data)` 호출 |
 | `btip-22-xx.md` | ⚠️ 미수정 | 조직별 Root CA 매핑 반영 필요 |
 | `btip-23.md` | ✅ 수정 완료 | BTIP23 interface (verifyProof + setPolicyContract), getRootCA(mspid) |
 | `btip-24.md` | ✅ 수정 완료 | BTIP24 interface (isProcessed + markProcessed) |
 | `btip-25.md` | ✅ 신규 | TransferEventElems 정의 |
-| `btip-26.md` | ✅ 신규 | BTIP26 interface (handleLinkerEvent) — dApp 콜백 인터페이스 |
-| `btip-27.md` | ✅ 신규 | BPuN Event Structure — 2단계 머클 트리, `tx_event_root` 산출까지 범위 (신뢰 체계 상세는 btip-28로 이동) |
-| `btip-28.md` | ✅ 신규 | BPuN Tx/Event Proof — Single-Path Trust Model(계산 상세 포함), 다이제스트 페이로드(`block_parts_total/hash` 인라인), 불투명 함수 명확화 |
-| `btip-29.md` | ✅ 수정 완료 | LinkerEndpoint Chaincode on BPrN — `type BTIP29 interface`, `EventAttrProof` 구조체, `sourceAddress` 추출, `eventAttrsRoot` 기준 Nullifier (BTIP21 대응) |
-| `btip-31.md` | ✅ 수정 완료 | LinkerVerifier Chaincode on BPrN — `type BTIP31 interface`, `sha256(EventType+Key+Value)` 리프 재구성 (BTIP23 대응) |
+| `btip-26.md` | ✅ 수정 완료 | BTIP26 interface — `handleLinkerEvent(srcBlockNumber, srcTxIndex, indices, values)`, 이벤트 출처 정보 인용문(gidx 통일) |
+| `btip-27.md` | ✅ 수정 완료 | BPuN Event Structure — 2단계 머클 트리, leaf 해시 `sha256(value)`, 인덱스 기반 의미 결정, EVM 이벤트 순서 NOTE 제거 |
+| `btip-28.md` | ✅ 수정 완료 | BPuN Tx/Event Proof — `EventAttrProof` 제거(MerkleProof로 통합), `sha256(leaf)` 리프 해시 |
+| `btip-29.md` | ✅ 수정 완료 | LinkerEndpoint Chaincode on BPrN — MerkleProof 사용, `HandleLinkerEvent(srcChainId, srcBlockNumber, srcTxIndex, indices, values)` 호출 |
+| `btip-31.md` | ✅ 수정 완료 | LinkerVerifier Chaincode on BPrN — `sha256(proof.Leaf)` 리프 재구성 (BTIP23 대응) |
 | `btip-32.md` | ✅ 신규 | ValidatorSetRegistry Chaincode on BPrN — `type BTIP32 interface` (BTIP22 대응) |
 | `btip-33.md` | ✅ 수정 완료 | LinkerNullifier Chaincode on BPrN — `type BTIP33 interface`, `sha256(eventAttrsRoot\|\|chaincodeID)` (BTIP24 대응) |
-| `btip-34.md` | ✅ 신규 | Chaincode Interface for Linker Protocol V2 on BPrN — `HandleLinkerEvent(sourceAddress, eventType, keys, values)` (BTIP26 대응) |
+| `btip-34.md` | ✅ 수정 완료 | Chaincode Interface for Linker Protocol V2 on BPrN — `HandleLinkerEvent(srcChainId, srcBlockNumber, srcTxIndex, indices, values)`, 이벤트 출처 정보 인용문 (BTIP26 대응) |
 
 ---
 
