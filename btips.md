@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-04-20
+last_updated: 2026-04-21
 ---
 
 # BTIPS 작업 컨텍스트
@@ -52,7 +52,7 @@ Structure TxEventProofPayload:
 ```solidity
 struct MerkleProof {
     bytes     leaf;
-    uint256   gindex;
+    uint256   index;
     bytes32[] siblings;
 }
 
@@ -299,6 +299,61 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 
 - **자료구조/인터페이스 표기**: BPrN 체인코드는 Go 문법으로 작성 (BPuN 스마트 컨트랙트는 Solidity)
 - **BPuN ↔ BPrN 대칭 매핑**: BTIP21↔29, BTIP22↔32, BTIP23↔31, BTIP24↔33
+
+### 2026-04-21
+
+#### ✅ btip-16 — EventLog 구조 변경: evtlog_id 제거, selector를 Header 필드로 추가
+
+- Header에서 `evtlog_id` (string) 필드 제거
+- Header에 `selector` (bytes) 필드 추가 — 이벤트 종류를 식별하는 32바이트 해시값
+- EventLog는 `header` + `elems` 2개 필드 구조 유지 (selector는 Header 내부)
+- protobuf: `Header { channel_id, chaincode_id, tx_id, selector }`, `EventLog { header, elems }`
+- Selector 섹션: `evtlog_id` 참조 제거, `EventName(type1,type2,...)` 형식으로 설명
+- gidx 테이블: gidx:3 소스를 `Header.selector`로 변경
+- Event Architecture, Merkle Tree 구조 설명 갱신
+
+#### ✅ btip-16 — Header.tx_id 타입 변경: string → bytes
+
+- `string tx_id` → `bytes tx_id`로 변경
+
+#### ✅ btip-25, 29 — btip-16 EventLog 구조 변경 반영
+
+- btip-25: `Header.evtlog_id` 참조 문장 제거, gidx 테이블 tx_id 타입 `string` → `bytes`
+- btip-29: `EventLog.Header`의 `evtlog_id` → `EventLog.Header`의 `selector`로 변경, gidx 테이블 tx_id 타입 `string` → `bytes`
+- btip-29 OnProof 슈도코드: `Header(channel_id, chaincode_id, tx_id, selector=...)` 형식으로 변경
+- btip-26: 이벤트 출처 정보 인용문 "EventLog Header에는"으로 복원
+
+#### ✅ btip-24 — IBTIP24 소스 코드 반영: markProcessed 원자적 check+mark
+
+- `markProcessed` 반환 타입 추가: `returns (bool wasDup)`
+- 이미 처리된 쌍이면 `true` 반환 (상태 변경 없음), 새로 처리하면 `false` 반환
+- `isProcessed` + `markProcessed` 2단계 패턴 → `markProcessed` 단일 호출로 간소화
+- 인터페이스 설명, 구현 슈도코드, 호출 순서 섹션 갱신
+- 소스 코드 위치: `linker-v2/verifier/on-bpun/contracts/interfaces/IBTIP24.sol`
+
+#### ✅ btip-21 — onProof 흐름 변경: markProcessed 원자적 호출 반영
+
+- `isProcessed` 호출 제거, `markProcessed` 단일 호출로 중복 검사+등록 수행
+- 순서: 검증 위임 → `markProcessed(event_root_hash, targetDApp)` → `wasDup`이면 revert
+- 설명 텍스트: "Nullifier 계산" + "중복 처리 검사" 항목 → "이벤트 루트 해시 추출" + "중복 검사 + 처리 완료 기록" 항목으로 통합
+
+#### ✅ btip-23 — IBTIP22 소스 코드 반영: 조직별 CRL, 복합 getter
+
+- `getCRL()` → `getCRL(mspid)` — 전역 CRL에서 조직별 CRL로 변경
+- `getRootCAAndCRL(mspid)` 복합 getter 추가 (Root CA + CRL 단일 호출)
+- `getEndorsementPolicy()` 반환 타입 명시: `(uint256 minEndorsers, bytes[] requiredOUs)`
+- 소스 코드 위치: `linker-v2/verifier/on-bpun/contracts/interfaces/IBTIP22.sol`
+
+#### ✅ btip-19 — verify_event_proof CRL 조직별 조회 반영
+
+- `get_crl()` 전역 호출 제거
+- `get_root_ca_and_crl(mspids[i])` 루프 내 조직별 Root CA + CRL 동시 조회로 변경
+
+#### ✅ btip-20 — 시퀀스 다이어그램 갱신
+
+- `isProcessed` 호출 제거, `markProcessed(event_root_hash, targetDApp)` → `wasDup = false` 반영
+- `getRootCA(mspid)` → `getRootCAAndCRL(mspid)` 변경, 반환값 `rootCA, crl` 표시
+- `getEndorsementPolicy()` 반환값 `(minEndorsers, requiredOUs)` 표시
 
 ### 2026-04-20
 
@@ -695,14 +750,14 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 
 | 파일 | 상태 | 현행 주요 구조 |
 |------|------|---------------|
-| `btip-16.md` | ✅ 수정 완료 | null 기반 머클 트리 패딩, `## Appendix: BTIP16 Merkle Tree` 추가, `## Event Architecture` 내용 보강 |
+| `btip-16.md` | ✅ 수정 완료 | Header: `channel_id`, `chaincode_id`, `tx_id`(bytes), `selector`(bytes). `evtlog_id` 제거. BTIP16 Merkle Tree Appendix |
 | `btip-17.md` | ✅ 수정 완료 | 실패 트랜잭션 리프 null, hashPair 규칙 BTIP16 참조, `Sign(PrivKey, block_height \|\| block_event_root)` |
-| `btip-19.md` | ✅ 수정 완료 | MerkleProof\<Leaf\> (`index` 필드), block_number, mspids, cert_chains, block_commit_sigs, event_log_root_proof, event_elem_proofs |
-| `btip-20.md` | ✅ 수정 완료 | verifyProof, subgraph 다이어그램, sha256, getRootCA(mspid), 조직별 Root CA 체계, `.index` 필드 참조 |
-| `btip-21.md` | ✅ 수정 완료 | BTIP21 interface, MerkleProof `index` 필드, `handleLinkerEvent(srcBlockNumber, srcTxIndex, indices, data)` 호출 |
+| `btip-19.md` | ✅ 수정 완료 | MerkleProof\<Leaf\> (`index` 필드), block_number, mspids, cert_chains, block_commit_sigs, `get_root_ca_and_crl(mspid)` 조직별 조회 |
+| `btip-20.md` | ✅ 수정 완료 | verifyProof, subgraph 다이어그램, sha256, `getRootCAAndCRL(mspid)`, `markProcessed` → `wasDup` 반영 |
+| `btip-21.md` | ✅ 수정 완료 | BTIP21 interface, MerkleProof `index` 필드, `markProcessed` 원자적 호출, `handleLinkerEvent(srcBlockNumber, srcTxIndex, indices, data)` |
 | `btip-22-xx.md` | ⚠️ 미수정 | 조직별 Root CA 매핑 반영 필요 |
-| `btip-23.md` | ✅ 수정 완료 | BTIP23 interface (verifyProof + setPolicyContract), getRootCA(mspid) |
-| `btip-24.md` | ✅ 수정 완료 | BTIP24 interface (isProcessed + markProcessed) |
+| `btip-23.md` | ✅ 수정 완료 | BTIP23 interface (verifyProof + setPolicyContract), `getCRL(mspid)`, `getRootCAAndCRL(mspid)`, `getEndorsementPolicy()` 구조화 반환 |
+| `btip-24.md` | ✅ 수정 완료 | BTIP24 interface — `markProcessed` returns `bool wasDup` (원자적 check+mark), `cancelNullifier` |
 | `btip-25.md` | ✅ 신규 | TransferEventElems 정의 |
 | `btip-26.md` | ✅ 수정 완료 | BTIP26 interface — `handleLinkerEvent(srcBlockNumber, srcTxIndex, indices, values)`, 이벤트 출처 정보 인용문(gidx 통일) |
 | `btip-27.md` | ✅ 수정 완료 | BPuN Event Structure — 2단계 머클 트리, leaf 해시 `sha256(value)`, 인덱스 기반 의미 결정, EVM 이벤트 순서 NOTE 제거 |
@@ -729,7 +784,7 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 ```python
 def verify_event_proof(payload: TxEventProofPayload):
     # Step 1. Nullifier 중복 검사
-    # Step 2. 인증서 체인 검증 + CRL 확인 → mspids[i]로 조직별 Root CA 조회 → (serial_no, pubkey, ou) 수집
+    # Step 2. 인증서 체인 검증 + CRL 확인 → get_root_ca_and_crl(mspids[i])로 조직별 Root CA + CRL 조회 → (serial_no, pubkey, ou) 수집
     # Step 3. 보증 정책 대조 (endorser_count, ous, serial_nos)
     # Step 4. 블록 커밋 서명 검증 → block_event_root 신뢰 확보
     # Step 5. 블록 이벤트 머클 증명 검증 → event_log_root 신뢰 확보
