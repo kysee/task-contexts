@@ -1,6 +1,6 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-04-20 (4차) — Gas 최적화 (1.77M → ~420K, -76%)
+> 마지막 업데이트: 2026-04-21 — IBTIP24 `markProcessed` 통합, `prover` → `prover-ts` 리네임, BTIP-16 `tx_id`/`selector` 바이트 반영
 
 ---
 
@@ -13,11 +13,11 @@ BTIP 문서 원본: `/Users/kylekwon/projects/beatoz/docs/BTIPS/`
 
 ## 프로젝트 구조
 
-- **Solidity 컨트랙트**: `/Users/kylekwon/projects/beatoz/linker-v2/verifier/`
+- **Solidity 컨트랙트**: `/Users/kylekwon/projects/beatoz/linker-v2/verifier/on-bpun/`
   - Hardhat 3.3.0, Solidity 0.8.28
   - 플러그인: `@nomicfoundation/hardhat-toolbox-viem`
   - 의존성: `@openzeppelin/contracts` (Ownable)
-- **Prover API**: `/Users/kylekwon/projects/beatoz/linker-v2/prover/`
+- **Prover API**: `/Users/kylekwon/projects/beatoz/linker-v2/prover-ts/` (2026-04-21 `prover/` → `prover-ts/`)
   - NestJS, TypeScript, `fabric-network` SDK, `protobufjs`
 
 ---
@@ -57,6 +57,11 @@ BTIP 문서 원본: `/Users/kylekwon/projects/beatoz/docs/BTIPS/`
 - `IBTIP26.cancelLinkerEvent(bytes32 eventRootHash)` — dApp 인터페이스에 대응 함수 추가
 - `MockDApp`: `_nullifier` 저장 + `setNullifierContract(address)` + `cancelLinkerEvent` 구현
 - `LinkerVerifier.EndorserInfo` → `SignerInfo` 로 개명
+
+### ✅ IBTIP24 `markProcessed` 통합 (2026-04-21)
+
+- 기존 `markProcessed(bytes32, address)` 삭제, `checkAndMark` 을 **`markProcessed returns (bool wasDup)`** 으로 네이밍 통일
+- `AlreadyProcessed` 에러 제거 — 중복 시 `wasDup=true`로 반환, `LinkerEndpoint`가 `DuplicateProof`로 revert
 
 ### ✅ 배포 순서
 
@@ -128,11 +133,11 @@ uint64 srcTxIndex = _toLeafIndex(payload.event_log_root_proof.index);
 ### ✅ NestJS 프로젝트 구조
 
 ```
-prover/
+prover-ts/                            # 2026-04-21 `prover/` 에서 리네임
 ├── package.json
 ├── tsconfig.json / nest-cli.json
 ├── .env / .env.example
-├── connection-profile.json          # 절대경로 기반 (prover/ 디렉토리에 위치)
+├── connection-profile.json          # 절대경로 기반 (prover-ts/ 디렉토리에 위치)
 ├── proto/
 │   ├── common.proto                 # Block/Envelope/Payload/Metadata/Timestamp
 │   ├── peer.proto                   # Transaction/Endorsement/ChaincodeEvent
@@ -225,9 +230,10 @@ if (sibBuf.equals(ZERO32)) {
 | `deploy.ts <chainAlias>` | 전체 컨트랙트 배포 + wire-up |
 | `set-policy.ts <chainAlias>` | LinkerPolicy에 RootCA/EndorsementPolicy 설정 |
 | `setup-localnet0.sh` | deploy + set-policy 한 번에 실행 |
-| `submit-proof.ts <chainAlias> <dappAlias>` | TxEventProof 제출 (신규 필드 mspids/block_number/index 반영) |
-| `query-dapp.ts <chainAlias> <dappAlias> [index]` | MockDApp 이벤트 조회 (srcBlockNumber/srcTxIndex/indices/values 기준) |
+| `submit-proof.ts <chainAlias> <dappAlias>` | TxEventProof 제출 + `LinkerProofReceived` 이벤트 파싱/출력 (MockDApp storage 제거 후 대체) |
 | `cancel-event.ts <chainAlias> <dappAlias> <eventRootHash>` | nullifier 취소 |
+
+> `query-dapp.ts`는 2026-04-20 MockDApp storage 제거와 함께 삭제됨 (더 이상 조회 대상 없음).
 
 - dApp 주소는 모두 `<dappAlias>` 로 받아 `.net/deployed.<chainAlias>.<dappAlias>.json` 에서 로드
 - `utils.ts`: `deliver_tx.log`의 `reason: <hex>` 패턴에서 hex를 추출해 keccak256 selector로 커스텀 에러 디코딩
@@ -288,6 +294,38 @@ LinkerEndpoint (BTIP21)
 ---
 
 ## 최근 작업 이력
+
+### 2026-04-21 — IBTIP24 정리 / 디렉토리 리네임 / BTIP-16 bytes 반영
+
+**IBTIP24 API 정리**:
+- 기존 `markProcessed(bytes32, address)` 삭제, `checkAndMark` → **`markProcessed(bytes32, address) returns (bool wasDup)`** 으로 네이밍 통일 (atomic check+mark 의미 유지)
+- `AlreadyProcessed` 에러 제거 — 중복 시 `wasDup=true` 리턴으로 대체, `LinkerEndpoint`가 `DuplicateProof`로 revert
+- **변경 파일**: `contracts/interfaces/IBTIP24.sol`, `contracts/LinkerNullifier.sol`, `contracts/LinkerEndpoint.sol`, `scripts/beatoz/utils.ts` (selector 테이블에서 `AlreadyProcessed` 엔트리 제거)
+
+**Prover 디렉토리 리네임 `prover/` → `prover-ts/`**:
+- `git mv prover prover-ts` — 히스토리 보존
+- `.env`의 `FABRIC_CONNECTION_PROFILE` 절대경로도 `prover-ts/connection-profile.json`로 갱신
+- NestJS 내부 `ProverService`/`ProverModule`/`./prover/prover.module` 같은 모듈 식별자는 그대로 유지 (디렉토리 리네임과 무관)
+
+**Prover 스크립트 리네임 + 출력 순서 조정**:
+- `prover-ts/scripts/test-prove.ts` → `test-proof.ts`
+- `TxEventProof` JSON 출력을 **검증 완료 후 마지막**으로 이동 (이전: 요청 직후)
+- 사용되지 않던 `derToRS` 함수 삭제
+
+**BTIP-16 — `EventLog.tx_id` / `selector` bytes 반영**:
+- `prover-ts/src/common/event-log.ts`:
+  - `txId: string` → **`txId: Buffer`** (BTIP-16 spec: `bytes tx_id = 3;`)
+  - Constructor에 `selector: Buffer` 파라미터 추가 → **`(channelId, chaincodeId, txId, selector)`** 4-인자 생성
+  - `selector`를 `readonly`로 변경 (사후 할당 제거, 생성 시점에 확정)
+  - `leaves()`에서 `Buffer.from(this.txId)` → `this.txId` (이미 Buffer)
+- `prover-ts/src/prover/prover.service.ts`:
+  - Fabric 응답의 `parsed.txId`(hex sha256 문자열) → `Buffer.from(..., 'hex')` 로 디코드
+  - Fabric 응답의 `parsed.chaincodeEvent.eventName`(hex selector 문자열) → `Buffer.from(..., 'hex')` 로 디코드 후 `selector`로 전달
+  - 근거: BPrN 체인코드는 Fabric의 `event_name` 필드에 sha256 selector(32B)의 **hex 인코딩 문자열**을 실어 보냄
+
+**검증**:
+- `npx hardhat compile`: 4 Solidity files 성공 (solc 0.8.28, cancun)
+- `npx tsc --noEmit` (prover-ts): EXIT=0
 
 ### 2026-04-20 — BTIP 문서 변경사항 반영
 - **contracts/interfaces/IBTIP21.sol**: `MerkleProof.gindex → index`, `TxEventProof.msp_ids → mspids`, `block_number: uint64` 추가
