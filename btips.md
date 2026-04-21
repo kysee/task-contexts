@@ -355,6 +355,24 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 - `getRootCA(mspid)` → `getRootCAAndCRL(mspid)` 변경, 반환값 `rootCA, crl` 표시
 - `getEndorsementPolicy()` 반환값 `(minEndorsers, requiredOUs)` 표시
 
+#### ✅ btip-35.md — BPuN Transaction Event Definition 신규 생성
+
+- `asyncExecTrxContextEx` 구현 기반 BPuN 트랜잭션 이벤트 정의 문서
+- `"tx"` 이벤트: 4개 attribute (type, sender, receiver, amount) — Per-Event Tree 인덱스 0~3
+- `"evm"` 이벤트: 가변 attribute (contractAddress, topic.N, data, blockNumber, removed)
+- Event Ordering: `"tx"` 항상 Events[0], `"evm"` 이벤트는 EVM 로그 순서대로 추가
+- 실패 트랜잭션: `tx_event_root` 미기록, 증명 대상 아님
+- 트랜잭션 유형 문자열: transfer, staking, unstaking, proposal, voting, contract, setdoc, withdraw
+- Per-Event Tree 구조 다이어그램 포함
+
+#### ✅ btip-27 — btip-35 관련 변경 롤백
+
+- btip-27은 작성 시점의 beatoz-go 이벤트 구성(asyncExecTrxContextOld 기준)이 원본이므로 롤백
+- btip-35에서 btip-27의 이벤트 구성이 초기 구현 기준이며 본 문서로 대체됨을 Motivation에 명시
+- 원칙: 앞선 문서(btip_N)가 후행 문서(btip_N+M)를 참조하지 않음
+
+#### ✅ README.md — BTIP35 항목 추가
+
 ### 2026-04-20
 
 #### ✅ btip-27 — Leaf 해시 단순화: `sha256(event_type || key || value)` → `sha256(value)`
@@ -760,13 +778,14 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 | `btip-24.md` | ✅ 수정 완료 | BTIP24 interface — `markProcessed` returns `bool wasDup` (원자적 check+mark), `cancelNullifier` |
 | `btip-25.md` | ✅ 신규 | TransferEventElems 정의 |
 | `btip-26.md` | ✅ 수정 완료 | BTIP26 interface — `handleLinkerEvent(srcBlockNumber, srcTxIndex, indices, values)`, 이벤트 출처 정보 인용문(gidx 통일) |
-| `btip-27.md` | ✅ 수정 완료 | BPuN Event Structure — 2단계 머클 트리, leaf 해시 `sha256(value)`, 인덱스 기반 의미 결정, EVM 이벤트 순서 NOTE 제거 |
+| `btip-27.md` | ✅ 수정 완료 (btip-35 관련 롤백) | BPuN Event Structure — 2단계 머클 트리, leaf 해시 `sha256(value)`, 인덱스 기반 의미 결정. 이벤트 구성은 작성 시점(asyncExecTrxContextOld) 기준, btip-35에서 대체 |
 | `btip-28.md` | ✅ 수정 완료 | BPuN Tx/Event Proof — `EventAttrProof` 제거(MerkleProof로 통합), `sha256(leaf)` 리프 해시 |
 | `btip-29.md` | ✅ 수정 완료 | LinkerEndpoint Chaincode on BPrN — MerkleProof 사용, `HandleLinkerEvent(srcChainId, srcBlockNumber, srcTxIndex, indices, values)` 호출 |
 | `btip-31.md` | ✅ 수정 완료 | LinkerVerifier Chaincode on BPrN — `sha256(proof.Leaf)` 리프 재구성 (BTIP23 대응) |
 | `btip-32.md` | ✅ 신규 | ValidatorSetRegistry Chaincode on BPrN — `type BTIP32 interface` (BTIP22 대응) |
 | `btip-33.md` | ✅ 수정 완료 | LinkerNullifier Chaincode on BPrN — `type BTIP33 interface`, `sha256(eventAttrsRoot\|\|chaincodeID)` (BTIP24 대응) |
 | `btip-34.md` | ✅ 수정 완료 | Chaincode Interface for Linker Protocol V2 on BPrN — `HandleLinkerEvent(srcChainId, srcBlockNumber, srcTxIndex, indices, values)`, 이벤트 출처 정보 인용문 (BTIP26 대응) |
+| `btip-35.md` | ✅ 신규 | BPuN Transaction Event Definition — `"tx"` 4 attrs (type, sender, receiver, amount), `"evm"` 가변 attrs, 이벤트 순서, 실패 tx 처리 |
 
 ---
 
@@ -776,6 +795,7 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 - **파일 이름**: `btip-21.md` (하이픈 있음)
 - **마크다운 링크**: `[BTIP21](./btip-21.md)` (표시 텍스트는 스펙명, URL은 파일명)
 - **frontmatter requires**: `requires: btip21` (스펙명 규칙 따름)
+- **참조 방향**: btip_N은 btip_N+M을 참조하지 않음 (후행 문서에서 선행 문서를 참조)
 
 ---
 
