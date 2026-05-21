@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-04-21
+last_updated: 2026-05-21
 ---
 
 # BTIPS 작업 컨텍스트
@@ -188,6 +188,71 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 ---
 
 ## 세션별 완료 작업
+
+### 2026-05-21
+
+> 📎 이 세션의 **전체 논의 흐름·검토 대안·결정의 의도·발견한 함정**은 별도 설계 노트 `./btips-2pc-design.md`에 자기완결적으로 정리됨. 아래는 작업 요약.
+
+#### ✅ 결과-주도 2PC (Cross-Chain Atomic Payment) 설계 및 스펙 작성
+
+**문제**: 기존 문서는 BPrN→BPuN 단방향 증명만 다룸. 그러나 BPuN dApp의 처리 결과(accept/reject)를 BPrN으로 되돌려, 원발신 결제를 settle/refund해야 함. (예: BPrN 결제 → BPuN NFT 발행, dApp이 발행 거부 시 BPrN 결제 환불)
+
+**해결 모델 — 에스크로 + 타임아웃 없는 결과-주도 2PC**:
+- BPrN 결제를 즉시 확정하지 않고 **에스크로(LOCKED)** 로 잠금. ACCEPTED/REJECTED 결과 증명 도착으로만 SETTLED/REFUNDED.
+- **타임아웃 없음** — 타임락 순서 레이스(이중 결과) 원천 제거. 안전 근거: 소비된 증명당 결과 정확히 1개 보장 + 결과는 BPuN 원장에 영구 기록 → 누구나(구매자 본인 포함) 언제든 결과 증명 제출 가능 (BPuN 살아있는 한 동결 없음).
+- 잔여 리스크: BPuN 영구 정지 시 동결 → #6 운영 정책(결제 일시중단 + relayer force-drain 후 업그레이드)으로 통제.
+
+**핵심 설계 결정**:
+- **correlationId = 정방향 `tx_event_root`** (tx_id가 BTIP16 머클트리 gidx:2에 커밋되어 유일·content-bound, btip-24 Nullifier 기준값과 동일, 발신 체인코드가 실행 시점에 직접 계산 가능). tx_id보다 우월.
+- **dApp revert-only** (bool 리턴 없음): 정상 반환=ACCEPTED, revert=REJECTED. LinkerEndpoint가 try/catch로 감싸 "소비된 증명당 결과 정확히 1개" 보장. revert가 부작용을 원자적 롤백.
+- **always emit**: opt-in 마커 없이 모든 소비 증명에서 LinkerResult emit.
+- **tx당 PaymentLocked 1개** (correlationId 모호성 제거).
+- **onProof vs onResult 분리**: 정방향 증명(BPuN btip-21.onProof)과 LinkerResult 증명(BPrN btip-29.OnResult)은 서로 다른 체인에서 소비. OnResult는 "소스 컨트랙트 == 공식 BPuN LinkerEndpoint" 추가 검증(레지스트리 조회) 후 HandleLinkerResult로 라우팅.
+
+#### ✅ btip-37.md 신규 — LinkerRegistry interface on BPuN (Solidity)
+
+- 공식 컨트랙트 세트(LinkerEndpoint/Verifier/Policy/Nullifier) 진본성 단일 출처
+- `getContract(role)`, `getCodeHash(role)`, `isAuthentic(role, addr)`, `getRemoteEndpoint(chainId)`, `setContract`(거버넌스), `setRemoteEndpoint`
+- CREATE2 결정적 배포(salt+bytecode 해시 공개) + multisig·timelock 거버넌스
+- "신뢰의 뿌리는 주소가 아니라 LinkerPolicy의 Root CA" 명시 — 레지스트리는 진본 식별의 편의·바인딩 계층
+
+#### ✅ btip-38.md 신규 — LinkerRegistry Chaincode on BPrN (Go)
+
+- btip-37의 BPrN 대응 (대칭). `GetContract`, `IsAuthentic`, `GetRemoteEndpoint`(공식 BPuN 엔드포인트 주소 보관), `SetContract`/`SetRemoteEndpoint`(관리자)
+- Fabric 패키지 ID에 해시 포함되어 사칭 자연 방지
+
+#### ✅ btip-21 개정 — LinkerResult 이벤트 + always-emit + try/catch
+
+- `LinkerResult(correlationId=tx_event_root, status, originChannelId, originChaincodeId, dApp)` 이벤트 추가
+- onProof: dApp 호출을 try/catch로 감싸 ACCEPTED/REJECTED 판정, 항상 LinkerResult emit. markProcessed는 try 이전(거부도 소비). nonReentrant + MIN_CALLBACK_GAS
+- "Result Callback (2PC)" 섹션 추가. Linker 컴포넌트 주소는 btip-37 레지스트리로 진본 확인
+
+#### ✅ btip-26 개정 — revert-only 의무 + 호출자 검증
+
+- handleLinkerEvent(이미 리턴값 없음): "정상 반환 ⟺ 이행 완료, 거부는 revert로만, 부작용 남긴 채 정상반환 금지"
+- `msg.sender == BTIP37(LinkerRegistry).getContract(LINKER_ENDPOINT)` 검증 의무
+
+#### ✅ btip-29 개정 — OnResult 메소드 추가
+
+- `OnResult(ctx, payload)`: LinkerResult 증명 소비. OnProof와 검증 동일하나 소스 컨트랙트(index 0)==공식 BPuN 엔드포인트(btip-38 GetRemoteEndpoint) + topic.0==LinkerResult 시그니처 추가 검증
+- 대상은 검증된 LinkerResult의 originChaincodeId에서 추출 → BTIP34.HandleLinkerResult(correlationId, status) 호출
+- btip-33 Nullifier로 relayer vs self-submit 중복 차단
+
+#### ✅ btip-34 개정 — HandleLinkerResult 콜백 + Escrow Lifecycle Reference
+
+- `HandleLinkerResult(ctx, correlationId []byte, accepted bool)` 전용 finalize 콜백 추가
+- HandleLinkerEvent/HandleLinkerResult: "정상 반환 ⟺ 이행 완료(아니면 에러), 호출자==공식 LinkerEndpoint(btip-38) 검증" 의무
+- **Reference: Escrow Lifecycle 섹션** 추가: 원발신 체인코드 두 역할, 상태머신(LOCKED→SETTLED/REFUNDED), 타임아웃 없음 근거, 제출 인센티브(판매자=ACCEPTED/구매자=REJECTED/relayer), 운영 정책(pause+force-drain)
+
+#### ✅ btip-33 점검 — LinkerResult 중복 제출 방지 NOTE 추가
+
+- OnResult가 소비하는 LinkerResult 증명도 event_attrs_root 기준 Nullifier로 dedupe (relayer vs 당사자 중복 제출 차단)
+
+#### ✅ README.md — BTIP37, BTIP38 등재
+
+#### 양방향 대칭 확장 보류 사항
+
+- 현재 BPrN-origin 흐름만 구현. BPuN-origin(btip-29가 forward+emit, btip-21에 onResult 추가)은 추후 대칭 확장.
 
 ### 2026-04-14
 
