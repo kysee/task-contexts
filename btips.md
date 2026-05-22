@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-21
+last_updated: 2026-05-22
 ---
 
 # BTIPS 작업 컨텍스트
@@ -188,6 +188,21 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 ---
 
 ## 세션별 완료 작업
+
+### 2026-05-22
+
+#### ✅ BPuN-origin 양방향 대칭 확장 (결과-주도 2PC)
+
+BPrN-origin의 거울상(BPuN 발신 → BPrN 앱 체인코드 처리 → 결과 BPuN 반송) 구현. 두 엔드포인트가 `onProof`(결과 발행) + `onResult`(결과 수신) 모두 갖춤. **전체 논의·결정 의도·검토 대안은 `./btips-2pc-design.md` 6절** 참조. 아래는 요약.
+
+- **correlationId 방향별 비대칭**: BPrN-origin = `tx_event_root`(내재), BPuN-origin = **발신 컨트랙트 명시 id**(nonce). 이유: BPuN(EVM) 컨트랙트가 event_attrs_root를 계산하면 beatoz-go `evmLogsToEvent` 인코딩에 강결합(노드 포맷 변경 시 깨짐). 명시 id로 회피. correlationId(매칭)와 Nullifier(재생방지, root 기준)는 분리.
+- **거부 표현 비대칭**: BPuN dApp = `revert`(EVM 자동 롤백), BPrN 앱 체인코드 = `accepted=false` 정상 리턴(Fabric 무롤백 → **CAUTION: 거부 전 PutState 금지**). contractapi가 err 시 리턴값을 버려 correlationId 유실되므로 거부를 err로 못 함. `error`는 하드 실패(tx 전체 실패→재시도) 전용.
+- **HandleLinkerEvent 반환 `(LinkerResultRef{CorrelationIndex int64, Accepted bool}, error)`**: 앱 체인코드가 correlationId의 **인덱스**를 반환 → EP가 검증된 values에서 값을 꺼냄(위조 방지). `CorrelationIndex<0` = fire-and-forget(opt-in 신호).
+- **fire-and-forget 비대칭**: #1 always-emit(내재 correlationId+revert는 신호 못 실음), #2 opt-in(CorrelationIndex 센티넬).
+- **네이밍**: BPuN쪽 Solidity 이벤트 `LinkerResult`, BPrN쪽 EventLog `LinkerResultElems`. `chaincodeID`→`appChaincodeID`(btip-29/33).
+- **검증**: `evmLogsToEvent`(ctrler.go:339) 확인 — event_attrs_root 계산은 가능하나 결합 위험으로 명시 id 선택. `removed`는 BFT 즉시완결로 항상 false.
+
+**파일 변경**: btip-29(OnProof 결과 발행+LinkerResultElems 정의+appChaincodeID), btip-21(onResult 추가), btip-26(handleLinkerResult+BPuN Escrow Lifecycle), btip-34(HandleLinkerEvent→LinkerResultRef+CAUTION), btip-33(appChaincodeID), btip-24(dedup NOTE).
 
 ### 2026-05-21
 

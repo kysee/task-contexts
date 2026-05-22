@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-21
+last_updated: 2026-05-22
 related: ./btips.md
 ---
 
@@ -111,9 +111,47 @@ related: ./btips.md
 
 ---
 
-## 6. 보류·후속 작업 (다음 세션에서)
+## 6. BPuN-origin 양방향 대칭 확장 (2026-05-22)
 
-1. **양방향 대칭 확장**: 현재 BPrN-origin만. BPuN-origin(btip-29가 forward+emit, btip-21에 onResult 추가)을 미러링.
-2. **멀티 dApp 에스크로**: 한 결제가 여러 dApp 액션을 트리거하면 correlationId를 `(tx_event_root, dApp)`로 확장(현재는 1:1이라 tx_event_root 단독).
-3. **구현 디테일 명문화**: 발신 체인코드가 계산한 tx_event_root가 네트워크 정규값과 일치(selector·elems 순서·직렬화)함을 스펙에 못박기.
-4. **커밋**: 8개 파일 변경 미커밋 상태. 검토 후 커밋.
+BPrN-origin의 거울상(결제·요청이 BPuN에서 발생 → BPrN 앱 체인코드가 처리 → 결과를 BPuN으로 반송)을 구현. 두 엔드포인트가 각각 `onProof`(결과 발행) + `onResult`(결과 수신)를 갖춰 완전 대칭.
+
+### 핵심 결정과 의도
+
+**D-A. correlationId 출처의 방향별 비대칭** (가장 많이 논의)
+- BPrN-origin: `tx_event_root`(**내재값** — EP가 증명에서 공짜로 가짐, 발신 체인코드가 BTIP16으로 계산 가능). 유지.
+- BPuN-origin: **발신 컨트랙트가 정한 명시 id**(nonce). 이유 — BPuN(EVM) 발신 컨트랙트가 event_attrs_root를 lock 시점에 계산하려면 beatoz-go `evmLogsToEvent` 인코딩(소문자 주소/대문자 topic/10진수 blockNumber/data 생략/순서)에 **강결합**되어 노드 포맷 변경 시 모든 컨트랙트가 깨짐. 그 결합을 피하려 명시 id 채택.
+- **검증 완료**: `evmLogsToEvent`([ctrler.go:339](~/go/src/github.com/beatoz/beatoz-go/ctrlers/vm/evm/ctrler.go)) 확인 — contractAddress=`address(this)`, topics/data=컨트랙트 생성, blockNumber=`block.number`(=l.BlockNumber), removed=항상 `"false"`(BFT 즉시완결+emit시점). 즉 계산은 *가능*하나 결합 위험 때문에 명시 id 선택.
+- correlationId(매칭)와 Nullifier(재생방지)는 **분리** — Nullifier는 여전히 tx_event_root/event_attrs_root 기준.
+
+**D-B. 거부 표현의 방향별 비대칭** (EVM vs HLF 본질 차이)
+- BPuN dApp(btip-26): 거부=`revert` → EVM이 자동 롤백 → "거부=무부작용" 강제.
+- BPrN 앱 체인코드(btip-34): **Fabric은 자동 롤백 없음.** InvokeChaincode가 에러 반환해도 그 전 PutState는 커밋됨. 게다가 contractapi는 `err != nil`이면 **리턴값(correlationId)을 버림** → 거부를 err로 표현하면 correlationId 유실. 따라서 거부=`accepted=false` **정상 리턴**(tx 커밋). → **CAUTION: `accepted=false` 반환 전 어떤 PutState도 금지** (안 그러면 "거부했는데 상태 변경은 반영" 불일치). `error`는 correlationId조차 못 주는 하드 실패 전용(tx 전체 실패→재시도).
+
+**D-C. HandleLinkerEvent가 index를 반환** (btip-34)
+- `HandleLinkerEvent(...) (LinkerResultRef, error)`, `LinkerResultRef{ CorrelationIndex int64; Accepted bool }`.
+- 앱 체인코드는 자기 스킴을 알므로 correlationId가 위치한 **인덱스(gidx)** 를 반환. EP는 **검증·확보한 values에서 그 인덱스 값**을 correlationId로 사용 → 앱 체인코드가 값을 위조 못 함(다른 escrow로 라우팅 불가, 기껏 self-griefing).
+- `CorrelationIndex < 0` → fire-and-forget(LinkerResultElems 미발행). 이게 #2의 opt-in 신호.
+
+**D-D. fire-and-forget 처리의 방향별 비대칭**
+- #1(btip-21): correlationId가 내재(tx_event_root)+거부가 revert(신호 못 실음) → **always-emit**(fire-and-forget도 안 쓰이는 LinkerResult 발행, 무해).
+- #2(btip-29): correlationId가 명시(비내재)+거부가 리턴값 → **opt-in**(CorrelationIndex<0이면 ProofVerifiedEventElems, ≥0이면 LinkerResultElems).
+
+**D-E. 이벤트 정의 네이밍**: BPuN쪽은 Solidity 이벤트 `LinkerResult`, BPrN쪽은 EventLog elems 정의라 `LinkerResultElems`(TransferEventElems/ProofVerifiedEventElems 관례).
+
+**D-F. `chaincodeID` → `appChaincodeID` 리네임** (btip-29/33): 이벤트를 실제 처리하는 앱 체인코드를 linker 체인코드 세트와 구분. (verifier/nullifier setter의 chaincodeID는 endpointID 등으로 별도 처리)
+
+### 구현 결과 (파일, 2026-05-22)
+- **btip-29**: OnProof가 HandleLinkerEvent 반환(LinkerResultRef) 수신 → `LinkerResultElems`(2PC) 또는 `ProofVerifiedEventElems`(fire-and-forget) 발행. `LinkerResultElems` EventLog 정의. `appChaincodeID` 리네임.
+- **btip-21**: `onResult` 추가 — BPrN `LinkerResultElems` 증명 소비, 소스=공식 BPrN 엔드포인트(btip-37 getRemoteEndpoint) 검증, btip-24 Nullifier dedup, `OriginContract`로 `handleLinkerResult` 라우팅.
+- **btip-26**: `handleLinkerResult(correlationId, accepted)` + BPuN Escrow Lifecycle Reference(명시 correlationId, 컨트랙트당 유일성 의무).
+- **btip-34**: `HandleLinkerEvent` 반환 `(LinkerResultRef, error)` + `Accepted=false` 거부 시 PutState 금지 CAUTION + 호출자 검증.
+- **btip-33**: `appChaincodeID` 리네임(SetLinkerEndpointID param은 `endpointID`).
+- **btip-24**: `LinkerResultElems` 증명 dedup NOTE.
+
+---
+
+## 7. 보류·후속 작업 (다음 세션에서)
+
+1. **멀티 dApp/앱 체인코드 에스크로**: 한 요청이 여러 액션을 트리거하면 correlationId 매칭을 `(correlationId, dApp)`로 확장(현재 1:1).
+2. **구현 디테일 명문화**: BPrN-origin에서 발신 체인코드가 계산한 tx_event_root가 네트워크 정규값과 일치함을 스펙에 못박기. (BPuN-origin은 명시 id라 무관)
+3. **커밋**: 이번 세션 변경(btip-21/24/26/29/33/34) 미커밋 상태. 검토 후 커밋.
