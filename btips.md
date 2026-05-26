@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-22
+last_updated: 2026-05-25
 ---
 
 # BTIPS 작업 컨텍스트
@@ -188,6 +188,50 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 ---
 
 ## 세션별 완료 작업
+
+### 2026-05-25
+
+#### ✅ btip-39.md 신규 — BPuN Validator Set Update Proof
+
+BTIP-32(LinkerPolicy)가 "별도 문서에서 다룬다"고 보류했던 Validator Set 자동 동기화 메커니즘 정의. BTIP-28이 전제한 "Verifier가 Validator Set을 보유한다"는 가정을 프로토콜 수준에서 충족. 자세한 설계 의도는 별도 문서 참조(또는 본 파일 §주석).
+
+**핵심 결정**:
+- **Sequential 전용** (Skipping/Bisection 제거): trusted_height → trusted_height+1 한 블록씩 전진. Tendermint 합의 항등식 `ValidatorsHash(H) == NextValidatorsHash(H-1)`만으로 결정론적 검증. trustLevel/long-range 가정 회피.
+- **secp256k1 전용**: BEATOZ는 tendermint-ethaddr 포크로 secp256k1만 사용. ed25519 분기 코드 없음.
+- **변경 탐지 = 헤더 비교**: 단일 헤더 H에서 `ValidatorsHash != NextValidatorsHash` 비교만. Prover는 BPuN 공개 RPC만으로 수행 가능, 권한 키 불요(trustless permissionless).
+- **인터페이스 = BTIP-32 확장 단일 메소드**: `UpdateValidatorSet(payload) error`. 저장소(`SetValidatorSet`/`GetValidatorSet`)는 BTIP-32 정의 그대로 사용, 재정의 없음. 검증 통과 시 `BTIP32.SetValidatorSet` self-call(권한 검사 우회).
+- **관리자 등록과 공존**: BTIP-32의 `SetValidatorSet`(관리자 전용)은 초기 부트스트래핑(H₀ 등록)/비상 보정에 유지.
+
+**데이터 구조**:
+- `SimpleValidatorEntry { pubkey (33B secp256k1 compressed), voting_power int64 }`
+- `ValidatorSetProofPayload { trusted_height, target_height, chain_id, round, block_hash, block_parts_total, block_parts_hash, validator_sigs, next_validators_hash_proof(헤더 인덱스 8), next_validator_set }`
+
+**검증 절차 5단계**: 페이로드 무결성 → trusted_set 조회 → Commit 서명 검증(2/3+) → 헤더 머클 증명(인덱스 8) → ValidatorsHash 재계산 일치 → BTIP-32.SetValidatorSet self-call.
+
+**Address Derivation**: secp256k1 → `Keccak256(uncompressedPubkey[1:])[12:]` (Ethereum 스타일). ValidatorsHash 자체는 SimpleValidator(PubKey, VotingPower)만 사용해 주소 파생과 무관, 서명자-Validator 매칭 단계에서만 필요.
+
+**작성 과정의 교정 사항** (재발 방지):
+- 초안에서 BTIP-32 저장소를 재정의 시도 → BTIP-32 인터페이스 그대로 사용으로 정정 (사용자 redirect)
+- 초안에 ed25519/secp256k1 양쪽 분기 → secp256k1 단일 전제로 정정 (BEATOZ 운영 사실)
+- Skipping(Bisection) 모드 포함 → Sequential 전용으로 단순화 (사용자 redirect)
+- 변경 탐지 방식 A/B 양쪽 → 방식 A(헤더 비교)만 유지
+- "관리자 등록(SetValidatorSet)" 표현 모호 → "관리자 전용 수동 등록 메소드"로 명확화
+- "Empty Commit 거부" 절에서 `BlockIDFlagCommit` 무문맥 사용 → BTIP-28 `ValidatorSignature` 정의 참조로 갈음 + 절 제목을 "서명자 임계치 우회 불가"로 변경
+- tendermint-ethaddr 포크 명시(URL/버전 link) → "Tendermint v0.34.24 기준" 한 줄로 축약 (BEATOZ 패키지 사정은 비공개 컨텍스트)
+
+**이름 변경 이력 (사용자 요청)**:
+- `ValidatorSetUpdateProofPayload` → `ValidatorSetProofPayload`
+- `SubmitValidatorSetUpdate` → `UpdateValidatorSet`
+
+**파일 변경**:
+- 신규: `btip-39.md` (Abstract / Trust Model / Validator Set Change Detection / Proof Construction / Submission Interface / Verification Procedure / Security Considerations / Conclusion)
+- 개정: `BTIPS/README.md` (BTIP39 등재)
+
+**메모리 저장**:
+- `project_beatoz_secp256k1_only.md` — BEATOZ Validator는 secp256k1 전용. ed25519 언급은 잘못된 것으로 간주.
+
+**부수 관찰**:
+- [btip-32.md:23](../docs/BTIPS/btip-32.md#L23) `Validator.PubKey` 주석에 "Ed25519 공개키 (32 bytes)" 잔존. 별도 작업으로 secp256k1 33B compressed로 교정 필요.
 
 ### 2026-05-22
 
