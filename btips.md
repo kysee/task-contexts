@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-25
+last_updated: 2026-05-26
 ---
 
 # BTIPS 작업 컨텍스트
@@ -188,6 +188,36 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 ---
 
 ## 세션별 완료 작업
+
+### 2026-05-26
+
+#### ✅ btip-28/31/32 — BPuN Validator 서명 알고리즘 secp256k1 교정
+
+BTIP-39(2026-05-25) 작성 중 발견한 ed25519 잔존 표현을 secp256k1로 교정. BEATOZ는 tendermint-ethaddr 포크로 secp256k1 전용이라는 사실(메모리: `project_beatoz_secp256k1_only`)과 BTIP-32 본문의 일관성 확보.
+
+**변경 파일**: btip-32(PubKey 주석 33B compressed + BTIP39 참조), btip-31(`verify_ed25519` → `verify_secp256k1`, 암호학적 함수 설명, BTIP23과의 차이 절), btip-28(`ed25519_sign` → `secp256k1_sign`). docs/ 전체에 `[Ee]d25519|EdDSA` 잔존 0.
+
+**기각한 디테일**: 초안에서 "서명 입력 = sha256(CanonicalVote)"를 추가했으나 tendermint-ethaddr의 실제 서명 입력 형식을 확인하지 않은 추측이라 제거. 알고리즘 표기만 유지.
+
+**커밋**: `b66ccde docs: Correct BPuN validator signature scheme to secp256k1`
+
+#### ✅ btip-37 통합 + btip-38 철회 — LinkerRegistry 다중체인 단일 인터페이스
+
+기존 BTIP-37/38은 BPuN/BPrN 측 LinkerRegistry를 별도 BTIP 번호로 정의했고, BPuN 측에는 로컬 컨트랙트용(`getContract(role)`)과 원격 BPrN 엔드포인트용(`getRemoteEndpoint(chainId)`) 메소드가 분리돼 있었음. 이를 단일 키 `(chainId, role) → address` 모델로 통합. 자세한 설계 의도는 `./btips-2pc-design.md` §8 참조.
+
+**핵심 변경 요약**:
+- **인터페이스 통합**: `getContract(bytes32 chainId, bytes32 role) → address` / `setContract(...)` 두 메소드만 남김. 자기 체인 조회는 `bytes32(block.chainid)`, 원격 BPrN은 `sha256(channelId)` (BTIP-9 규약).
+- **타입 통일**: BPrN 체인코드도 BTIP-9의 `(channelId, chaincodeId) → 20B address` 결정적 파생 규칙으로 `address` 타입 통일. 양 체인이 동일 데이터 모델 사용.
+- **제거**: `getCodeHash`/`isAuthentic`(EXTCODEHASH 검증은 로컬 BPuN에만 의미 있는 비대칭 기능 → dead weight), `getRemoteEndpoint`/`setRemoteEndpoint`(통합 키로 흡수), `CodeHashMismatch` 에러.
+- **btip-38 철회**: BTIP-37과 데이터 모델·메소드·의미가 모두 동일(차이는 언어뿐) → 별도 번호 분리 정당성 없음. BTIP-37에 Go 인터페이스를 Appendix로 통합. README에서 `(Reserved)` 표시(번호 재사용 안 함).
+
+**호출자 갱신**:
+- btip-21 onResult: `getRemoteEndpoint(BPRN_CHAIN_ID)` → `getContract(BPRN_CHAIN_ID, LINKER_ENDPOINT)`
+- btip-26 dApp 콜백 호출자 검증: `getContract(LINKER_ENDPOINT)` → `getContract(bytes32(block.chainid), LINKER_ENDPOINT)`
+- btip-29 OnResult: `GetRemoteEndpoint(payload.ChainID)` → `GetContract(payload.ChainID, LINKER_ENDPOINT)`. BTIP-38 참조 → BTIP-37
+- btip-34: BTIP-38 참조 → BTIP-37 (자기 체인 매핑 조회로 표현 정리)
+
+**커밋**: `50198c7 docs: Unify LinkerRegistry under BTIP37 with (chainId, role) key`
 
 ### 2026-05-25
 

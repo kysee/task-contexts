@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-25
+last_updated: 2026-05-26
 related: ./btips.md
 ---
 
@@ -156,4 +156,59 @@ BPrN-origin의 거울상(결제·요청이 BPuN에서 발생 → BPrN 앱 체인
 
 1. **멀티 dApp/앱 체인코드 에스크로**: 한 요청이 여러 액션을 트리거하면 correlationId 매칭을 `(correlationId, dApp)`로 확장(현재 1:1).
 2. **구현 디테일 명문화**: BPrN-origin에서 발신 체인코드가 계산한 tx_event_root가 네트워크 정규값과 일치함을 스펙에 못박기. (BPuN-origin은 명시 id라 무관)
-3. **커밋**: 이번 세션 변경(btip-21/24/26/29/33/34) 미커밋 상태. 검토 후 커밋.
+3. ~~**커밋**~~: 완료(2026-05-22 세션 변경 커밋 + 2026-05-26 후속 커밋).
+
+---
+
+## 8. LinkerRegistry 다중체인 통합 (2026-05-26)
+
+§3 결정 1(LinkerRegistry 추가)과 결정 6(OnResult 출처 검증) 이후, 인터페이스 표면이 분리되어 있던 부분을 단일 키 모델로 재정리. 결정 자체(레지스트리의 필요성·의도)는 변경 없고, **표현 방식만 통합**.
+
+### 변경 전 (btip-37/38 분리 시점)
+
+- **btip-37 (BPuN/Solidity)**: `getContract(role)`(자기 체인 컨트랙트) + `getRemoteEndpoint(chainId)`(상대 BPrN 엔드포인트 문자열) — 두 갈래로 분리. 추가로 `getCodeHash(role)`/`isAuthentic(role, addr)`로 EXTCODEHASH 비교를 통한 독립 검증 지원.
+- **btip-38 (BPrN/Go)**: btip-37의 거울상. `GetContract(role)`/`GetRemoteEndpoint(chainId)`/`IsAuthentic(...)`.
+- **반환 타입 비대칭**: BPuN 측은 `address`, BPrN 측은 `string`(체인코드 ID 문자열).
+
+### 변경 후
+
+```
+getContract(bytes32 chainId, bytes32 role) → address
+setContract(bytes32 chainId, bytes32 role, address contractAddr)
+```
+
+자기 체인 조회는 `bytes32(block.chainid)`, 원격 BPrN은 `sha256(channelId)` (BTIP-9). 양쪽 모두 20B `address`로 통일.
+
+### 핵심 결정과 의도
+
+**D8-A. (chainId, role) 단일 키로 통합**
+- **변경 이유**: 별도 메소드 `getRemoteEndpoint`는 본질적으로 같은 매핑(role → 공식 주소)을 다른 네임스페이스로 분리 보관하는 것일 뿐. `chainId`를 키 차원에 두면 의미 동일하면서 표면 축소.
+- **사용자 통찰**: "`LINKER_ENDPOINT_REMOTE`라는 role을 두면 되지 않냐"는 단순화 제안에서 출발. 검토 결과 `(chainId, role)` 합성 키가 멀티-BPrN 지원도 자연스럽게 흡수.
+
+**D8-B. BTIP-9로 BPrN 주소 정규화 → 타입 통일 가능**
+- BPrN의 chaincode address = `sha256(channelId + chaincodeId)`의 20B 추출(BTIP-9 정의). 이로써 BPuN 측에서도 BPrN endpoint를 EVM `address` 타입으로 받을 수 있게 됨.
+- **검토 단계의 함정**: 초기에 "BPrN endpoint는 string(체인코드 ID)이라 통합 불가"로 판단 → 사용자가 BTIP-9 계획 알림으로 즉시 무력화. **교훈**: 인접 BTIP의 도입 예정 규약을 모르면 잘못된 비대칭을 본질로 오인할 수 있음. 외부 의존 BTIP의 현황을 먼저 확인.
+
+**D8-C. `block.chainid` 활용 — 별도 self 센티넬 불필요**
+- EIP-1344의 `CHAINID` opcode(Solidity 0.8+ `block.chainid`)로 자기 체인 식별. dApp 호출 자연: `registry.getContract(bytes32(block.chainid), LINKER_ENDPOINT)`.
+- BPuN(uint256) vs BPrN(sha256 32B) 네임스페이스 충돌 — `bytes32(block.chainid)`는 앞 12B가 0인데, sha256 결과의 앞 12B가 0일 확률 2⁻⁹⁶ → 무시 가능.
+
+**D8-D. codeHash/isAuthentic 제거 (옵션 A)**
+- EXTCODEHASH 비교를 통한 독립 진본 검증은 **로컬 BPuN에서만 의미**. 다른 BPuN 체인의 EXTCODEHASH는 자기 체인에서 조회 불가, BPrN은 EVM EXTCODEHASH 자체 없음(Fabric 패키지 ID에 해시 포함).
+- 통합 인터페이스에 두면 원격 entry는 항상 0이 되어 비대칭 dead weight. dApp이 실제로 EXTCODEHASH 비교를 한다는 근거도 약함.
+- **결정**: 통합 게터만 남기고 제거. 필요하면 별도 메소드로 재도입(YAGNI).
+
+**D8-E. btip-38 철회 — 별도 BTIP 번호 분리 정당성 없음**
+- 다른 대칭 쌍(btip-22/32 PKI vs PoS, btip-23/31 X.509+P256 vs secp256k1+머클)은 **저장 데이터·검증 알고리즘이 본질적으로 비대칭** → 분리 정당.
+- LinkerRegistry는 통합 후 **동일 데이터 모델·동일 메소드·동일 의미** — 차이는 구현 언어뿐. 다른 대칭 쌍과 본질이 다름.
+- **결정**: BTIP-37 Appendix로 Go 인터페이스 흡수. 별도 번호 미사용(README `(Reserved)`).
+- **사용자 판단**: 초기에 Go 인터페이스를 본문 별도 섹션으로 두려 했으나 "Appendix가 적당하지 않냐"는 redirect — 본문은 인터페이스 표준 그 자체에 집중, 언어별 표현은 부록으로.
+
+### 부수 정리
+- **결정 1 본문 표현 갱신 사항**: "공식 컨트랙트 세트의 진본성을 역할별로 관리하는 온체인 단일 출처" → "공식 컴포넌트 세트의 진본성을 `(chainId, role)` 단위로 관리". 정신은 그대로.
+- **결정 6 본문 영향**: "btip-38 레지스트리 조회" 같은 표현은 모두 "btip-37 통합 레지스트리(BPrN 측 등록)" 식으로 명세 측에서 갱신 완료(btip-29, btip-34).
+
+### 구현 결과 (파일, 2026-05-26)
+- **개정**: btip-37(인터페이스 통합 + Chain ID Convention 절 + Go Appendix), btip-21(onResult 호출), btip-26(dApp 콜백 호출자 검증 2곳), btip-29(OnResult 호출 + BTIP-37 참조), btip-34(BTIP-37 참조).
+- **삭제**: btip-38.md (인덱스에서 `(Reserved)`).
+- **커밋**: `50198c7 docs: Unify LinkerRegistry under BTIP37 with (chainId, role) key`

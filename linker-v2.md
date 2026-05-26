@@ -1,6 +1,6 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-04-21 — IBTIP24 `markProcessed` 통합, `prover` → `prover-ts` 리네임, BTIP-16 `tx_id`/`selector` 바이트 반영
+> 마지막 업데이트: 2026-05-26 — BTIP39 인터페이스 추가, `.gitignore` 생성, 코드 주석 영문화
 
 ---
 
@@ -575,4 +575,32 @@ Forge vs BEATOZ 차이 (~190K) 내역:
 - **Solidity 반환값은 `calldata` 불가** — 외부 호출의 returndata는 언어/EVM 레벨에서 반드시 memory로 복사됨
 - **Event 비용**: 기본 375 gas + topic당 375 gas + 바이트당 8 gas; storage 대비 ~80배 저렴
 - **Indexed 대형 데이터 금기**: `bytes`/`string`/struct을 indexed로 하면 keccak 해시만 저장되고 원본 소실
+
+---
+
+## 2026-05-26 — BTIP39 인터페이스 추가 및 프로젝트 정비
+
+### ✅ `.gitignore` 생성
+
+프로젝트 루트에 `.gitignore` 추가. JetBrains IDE(`.idea/`), Node.js(`node_modules/`), Go 바이너리, OS 파일(`.DS_Store`), 환경변수(`.env`), TypeScript(`*.tsbuildinfo`), VS Code(`.vscode/`) 포함.
+
+### ✅ BTIP39 인터페이스 파일 (`verifier/on-bprn/types/ibtip39.go`)
+
+BTIP39(BPuN Validator Set Update Proof) 스펙 기반으로 인터페이스 및 타입 정의 추가.
+
+| 타입/인터페이스 | 역할 |
+|----------------|------|
+| `SimpleValidatorEntry` | 신규 Validator Set 항목 — `PubKey` (secp256k1 33B compressed) + `VotingPower` (int64). ValidatorsHash 계산 입력 |
+| `ValidatorSetProofPayload` | trustless Prover가 제출하는 Validator Set 변경 증명 페이로드. 기존 `RFC6962Proof`, `ValidatorSignature` 재사용 |
+| `IBTIP39` | `UpdateValidatorSet(ctx, *ValidatorSetProofPayload) error` — permissionless 증명 제출 진입점 |
+
+- `Round`(`int32`), `BlockPartsTotal`(`uint32`) 필드 타입은 기존 `BPuNTxEventProofPayload`와 일치
+- `go build ./types/` 컴파일 확인 완료
+
+### ✅ 코드 주석 영문화
+
+- `verifier/on-bprn/types/ibtip32.go` — 모든 한국어 주석을 영어로 변환
+- `verifier/on-bprn/types/ibtip39.go` — 영어 주석으로 작성
+
+**인터페이스 네이밍 규칙 (BPrN Go)**: `IBTIP{번호}` (예: `IBTIP32`, `IBTIP39`) — BPuN Solidity 인터페이스와 동일한 패턴
 
