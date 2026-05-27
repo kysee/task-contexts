@@ -1,6 +1,6 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-05-26 — BTIP39 인터페이스 추가, `.gitignore` 생성, 코드 주석 영문화
+> 마지막 업데이트: 2026-05-26 — BTIP-37/39 구현, secp256k1 교정, 레지스트리 기반 리팩토링, tmproto/tendermint 라이브러리 정합, BTIP-39 Prover 작성
 
 ---
 
@@ -603,4 +603,96 @@ BTIP39(BPuN Validator Set Update Proof) 스펙 기반으로 인터페이스 및 
 - `verifier/on-bprn/types/ibtip39.go` — 영어 주석으로 작성
 
 **인터페이스 네이밍 규칙 (BPrN Go)**: `IBTIP{번호}` (예: `IBTIP32`, `IBTIP39`) — BPuN Solidity 인터페이스와 동일한 패턴
+
+---
+
+## 2026-05-26 (구현 세션) — BTIP-37/39 구현 + secp256k1 + 레지스트리 리팩토링 + tendermint 라이브러리 정합
+
+> 위 2026-05-26 항목(인터페이스 추가/주석 영문화) 이후 같은 날 진행한 본격 구현 세션. on-bprn(Go)·on-bpun(Solidity)·prover-ts 전반.
+
+### ✅ BTIP-37 LinkerRegistry 구현 (신규)
+
+**on-bpun (Solidity)**: `contracts/interfaces/IBTIP37.sol` + `contracts/LinkerRegistry.sol`
+- `(bytes32 chainId, bytes32 role) → address`, `getContract`/`setContract`, `ContractRegistered` 이벤트, `UnknownContract`/`Unauthorized` 에러
+- Role 상수 4개(`keccak256`), 접근제어는 OZ `Ownable` + TODO 주석 (CREATE2/multisig/timelock는 운영 이슈로 보류)
+
+**on-bprn (Go)**: `types/ibtip37.go` + `linker-registry/main.go`
+- 저장 값 = **체인코드 이름(string)**. Fabric은 체인코드를 `(channelID, chaincodeID)` 문자열로 식별하고 `InvokeChaincode`/`SignedProposal` 모두 이름 기반. BTIP-9의 20B 주소는 단방향 해시라 이름으로 역산 불가 → 이름 저장.
+- 키 `(channelID, role)` 모두 string, X.509 admin(`EnsureAdmin`)
+- BTIP-37 문서 부록도 이에 맞춰 HLF 네이티브 string으로 개정(btips.md 참조)
+
+### ✅ 체인코드 간 호출을 레지스트리 기반으로 통합
+
+- 개별 setter 전부 제거: `SetLinkerPolicyID`(verifier), `SetLinkerEndpointID`(nullifier), `Set{Verifier,Nullifier}ChaincodeID`(endpoint), dapp의 `Set{Endpoint,Nullifier}ID`
+- 단일 부트스트랩 포인터 `SetRegistryID`(레지스트리 체인코드 이름)만 유지
+- 공유 헬퍼 `types/registry.go`: `RegistryIDKey`, `SetRegistryID`/`GetRegistryID`, `ResolveContract(role)` — `registry.GetContract(GetChannelID(), role)` invoke 후 이름 반환
+- 적용: endpoint→VERIFIER/NULLIFIER, verifier→POLICY, nullifier→ENDPOINT(호출자 인증), dapp→ENDPOINT/NULLIFIER
+
+### ✅ secp256k1 교정 (ed25519 제거)
+
+- linker-policy: pubkey 길이 33B 검증
+- linker-verifier: `crypto/ed25519` 제거 → 포크 `tmsecp256k1.PubKey(pub).VerifySignature(signBytes, sig)` (내부 sha256, **pre-hash 금지**)
+- 검증 스킴 근거(beatoz-go `types/crypto/crypto.go`): `ethcrypto.VerifySignature(pub33, sha256(signBytes), sig[:64])`, 주소 `tmsecp256k1.PubKey(pub).Address()`(ethereum-style keccak). `DefaultHash = sha256` 확정.
+
+### ✅ BTIP-39 UpdateValidatorSet 구현 (linker-policy)
+
+- 스텁(panic) → 5단계 검증: 페이로드 무결성(target==trusted+1, proof.index==8) → trusted_set 조회 → commit 서명 2/3+ → RFC6962 헤더 증명(index 8) → ValidatorsHash 재계산 일치 → self-call 저장(permissionless, 권한 우회). 동일 target 동일 해시 멱등 no-op.
+- 공유 검증 헬퍼를 `types/tmverify.go`로 이동/신설: `VerifyCommitSignatures`, `VerifyRFC6962`, `ComputeValidatorsHash`, `DecodeAminoBytes`, `ValidatorAddressFromPubKey`
+
+### ✅ tendermint 로직 직접 호출 (직접 구현 금지 원칙)
+
+해시·인코딩·디코딩 등 tendermint 값과 바이트 일치해야 하는 것은 손수 구현하지 않고 tendermint/gogo 라이브러리를 직접 호출:
+- ValidatorsHash: `(&tmtypes.ValidatorSet{Validators: vals}).Hash()` — `NewValidatorSet` 회피(주소 정렬·proposer priority 부작용), prover 원본 순서 보존
+- RFC6962 증명: `crypto/merkle` `merkle.Proof{...}.Verify` + `HashFromByteSlices`
+- cdcEncode된 헤더 bytes 필드 디코드: `gogotypes.BytesValue{}.Unmarshal` (손수 varint/protowire 파싱 폐기)
+- tx_result(ResponseDeliverTx) 디코드: `abci.ResponseDeliverTx{}.Unmarshal` (손수 필드 순회 폐기)
+- **버그 수정**: 기존 `DecodeAminoBytes`가 `varint(len)||bytes`로 가정 → 실제는 proto `BytesValue`(`0a 20 ...`) → 실증명 제출 시 `amino length prefix does not match payload` 발생. `gogotypes.BytesValue.Unmarshal`로 교정 (BTIP-28 LastResultsHash 경로도 동일)
+
+### ✅ 커스텀 ValidatorSet/Validator 제거 → tmproto.ValidatorSet 사용
+
+- `types.ValidatorSet`/`types.Validator`(커스텀 도메인 타입) 삭제
+- 크립토 내부 표현 = `tmproto.ValidatorSet`(`proto/tendermint/types`). 직렬화/저장/외부 경계 = hex DTO
+- 이유: tendermint 타입 중복 정의 안 함. tmproto.ValidatorSet엔 `Height` 없음 + `PubKey`가 `crypto.PublicKey` oneof라 `encoding/json` 왕복 불가 → 경계는 DTO, 크립토는 tmproto
+
+### ✅ BTIP-32 외부 인터페이스 hex 문자열화
+
+- `types/validatorset_dto.go`: `ValidatorSetDTO`/`ValidatorDTO`(address/pub_key hex), `HexToBytes`(0x 허용)/`BytesToHex`, `ToProto()`(DTO→tmproto, secp256k1 oneof), `Entries()`(→SimpleValidatorEntry)
+- IBTIP32: `GetValidatorSet`→`*ValidatorSetDTO`, `SetValidatorSet(*ValidatorSetDTO)`, `GetValidator(int64, string hex)`→`*ValidatorDTO`
+- 이유: 외부 호출 시 base64 인코딩/디코딩 번거로움 제거. 저장은 DTO JSON, 크립토는 tmproto로 변환
+- linker-verifier.`fetchValidatorSet`: 정책 응답(hex DTO) → `ToProto()`
+
+### ✅ contractapi 파라미터 스키마 — total_power optional
+
+- `SetValidatorSet` 호출 시 `total_power is required` 에러 → contractapi가 구조체 필드를 전부 required로 검증
+- `ValidatorSetDTO.TotalPower`에 `metadata:",optional"` 태그 추가(재계산되는 값이라 입력 불요). 함수 시그니처는 구조체 유지(string으로 바꿨다가 되돌림)
+
+### ✅ BTIP-39 Prover (`prover-ts/src/prover/btip39`, 신규)
+
+BPuN RPC(Tendermint, 26657)로 블록 1~latest 스캔 → Validator Set 변경 탐지 → 각 변경에 `ValidatorSetProofPayload` 생성:
+- `rpc.ts`(/status,/block,/commit,/validators), `header-merkle.ts`(v0.34 14필드 cdcEncode + RFC6962 + index8 증명), `validator-set-proof.ts`(payload 빌더 + SimpleValidator 인코딩으로 ValidatorsHash 재계산), `types.ts`(DTO, base64 byte 필드, `bigint` timestamp + `goJsonStringify`), `main.ts`(스캔 엔트리)
+- **self-검증**: 재구성 헤더 RFC6962 루트 == 노드 `block_hash`, 재계산 ValidatorsHash == 헤더 `next_validators_hash`. 둘 다 통과해야 출력. (TS는 Go 포크 import 불가 → 재구현하되 노드 값으로 교차검증 — 유일하게 허용되는 재구현)
+- 탐지 경계: 1..latest 전체 탐지, target 미커밋이면 "pending tip" 로깅. distinct ValidatorsHash 진단.
+- `npm run btip39:scan` (`OUT_DIR`로 파일 저장)
+- 검증: 실제 블록 2331 데이터로 헤더 인코딩 오프라인 검증 — 재구성 루트 == 노드 `block_hash`(8019698E…) 일치. `npx tsc --noEmit` 통과
+
+### 배포/부트스트랩 순서 (on-bprn)
+
+1. `linker-registry` 배포 → 각 역할 `SetContract(channelID, "LinkerEndpoint|Verifier|Policy|Nullifier", <cc 이름>)`
+2. 각 컴포넌트(+dapp) `SetRegistryID(<registry cc 이름>)` (linker-policy는 불요 — 다른 체인코드를 호출하지 않음)
+3. `SetValidatorSet`로 초기 Validator Set 등록 (hex JSON; `total_power` 생략 가능)
+- admin은 체인코드별 TOFU(`EnsureAdmin`) — 동일 신원으로 첫 admin 호출
+- JSON 인자는 jq로 escape: `jq -cn --arg p "$JSON" '{Args:["SetValidatorSet",$p]}'` (또는 `--rawfile`). **timestamp 정밀도** 위해 jq가 payload를 파싱하지 않게(`--arg`/`--rawfile`) 주의 (1779…E18 같은 큰 정수)
+
+### 검증 상태 / 제약
+
+- 샌드박스에 Go 미설치 + on-bprn vendor에 tendermint 누락 → Go 컴파일은 로컬: `cd verifier/on-bprn && go mod vendor && go build ./...`. `gogo/protobuf/types`, `abci/types`, `crypto/merkle`, `crypto/secp256k1`, `proto/tendermint/{types,crypto}`가 vendor에 포함돼야 함(모두 tendermint가 쓰는 패키지)
+- on-bpun Hardhat 컴파일도 샌드박스 제약(HHE21) → 로컬 `npx hardhat compile`
+- prover-ts: `tsc --noEmit` 통과
+
+### 주요 결정 요약
+
+- 레지스트리 BPrN 값 = 체인코드 이름(string) (BTIP-9 20B 주소 아님)
+- 커스텀 ValidatorSet/Validator 제거 → 크립토 = tmproto, 경계 = hex DTO
+- **해시뿐 아니라 인코딩/디코딩도 tendermint/gogo 라이브러리 직접 호출** (DecodeAminoBytes=gogo BytesValue, tx_result=abci.ResponseDeliverTx, ValidatorsHash=tmtypes.Hash(), RFC6962=crypto/merkle)
+- BTIP-32 외부 = hex string, `total_power`는 optional 태그
 

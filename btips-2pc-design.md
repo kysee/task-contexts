@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-26
+last_updated: 2026-05-27
 related: ./btips.md
 ---
 
@@ -212,3 +212,41 @@ setContract(bytes32 chainId, bytes32 role, address contractAddr)
 - **개정**: btip-37(인터페이스 통합 + Chain ID Convention 절 + Go Appendix), btip-21(onResult 호출), btip-26(dApp 콜백 호출자 검증 2곳), btip-29(OnResult 호출 + BTIP-37 참조), btip-34(BTIP-37 참조).
 - **삭제**: btip-38.md (인덱스에서 `(Reserved)`).
 - **커밋**: `50198c7 docs: Unify LinkerRegistry under BTIP37 with (chainId, role) key`
+
+---
+
+## 9. 2PC 보안 보강 — 결과 핸들러 바인딩(#5a) + Nullifier 단위(#4) (2026-05-27)
+
+§7의 보류 항목(설계 갭 점검)을 다시 검토하며 나온 결정·정정. §3~6의 의도 위에 누적.
+
+### #5a — 결과 콜백에 "핸들러 식별자" 추가 (구현됨, 문서)
+
+**문제(두 공격 벡터로 분해)**: "발신 앱이 받은 LinkerResult가 악의적으로 유도된 refund/settle가 아님을 어떻게 아는가?"
+- **벡터 1 — 위조 LinkerResult**(악의적 컨트랙트가 직접 emit): `OnResult`/`onResult`의 **출처 검증**(소스 컨트랙트 == 공식 LinkerEndpoint, LinkerRegistry 조회)이 차단. (원래 설계, #5a 아님)
+- **벡터 2 — 공식 엔드포인트 악용**(정방향 증명을 "항상 거부" 핸들러에 흘림): 공식 엔드포인트가 정당하게 `LinkerResult(correlationId, REJECTED, dApp=evil)`를 emit → 출처 검증 통과 → 잘못된 refund. **이게 #5a가 막는 부분.** 단순 오환불이 아니라 **정상 거래에 대한 griefing/DoS**(구매자는 서비스 못 받고 판매자는 미수금).
+
+**해결**: 결과 콜백이 **핸들러 식별자**를 싣게 함.
+- `handleLinkerResult(correlationId, handlerCcApp, accepted)`(btip-26) / `HandleLinkerResult(ctx, correlationId, handlerDApp, accepted)`(btip-34).
+- `onResult`는 `LinkerResultElems.appChaincodeID`(gidx:8), `OnResult`는 `LinkerResult.dApp`을 꺼내 콜백으로 포워딩. **이벤트 정의는 이미 핸들러 필드를 보유 → 정의 변경 0, 콜백 인자+포워딩만.**
+- **신뢰성**: 핸들러 필드는 공식 엔드포인트가 "자기가 호출한 대상"을 정직히 기록 + 증명·출처검증으로 위조 불가. → `handlerDApp == 의도한 dApp`인 결과를 얻으려면 *실제로* 그 dApp에 라우팅해야 하고, 그건 진짜 판정.
+- **앱 책임(분담)**: 프로토콜은 "누가 판정했나"를 위조불가하게 공급. "누가 판정*해야* 하나(intended handler)"는 **앱이 lock 시점에 기록**하고 콜백에서 비교(불일치 시 무시). 이는 origin의 "의도한 핸들러" 설정의 거울상이며, 자금 risk를 지는 쪽이 per-instance로 소유 — LinkerRegistry는 비즈니스 dApp을 담지 않으므로 레지스트리로 대체 불가.
+
+### #4 — Nullifier 소비 단위 = (root, app)당 1회로 확정 (구현됨, 문서)
+
+요소/속성별 세분화하지 않음. 양방향 대칭(btip-24 `(tx_event_root, dApp)`, btip-33 `(event_attrs_root, appChaincodeID)`). 필요한 요소는 한 증명에 모두 포함. btip-24/33에 NOTE 명문화.
+
+### #5b — 앱 책임으로 정리 (프로토콜 변경 없음)
+
+"1 tx → N 액션"은 앱이 correlationId로 N개 액션을 기록해두고 단일 accept/reject를 일괄 적용하면 됨(현 핸들러가 이벤트 단위 all-or-nothing이므로). per-action 독립 판정이 필요할 때만 프로토콜(eventIndex) 확장 — 현재 불요.
+
+### #5c — 철회 (비-이슈)
+
+"BPrN-origin tx_event_root가 네트워크 정규값과 일치 명문화"는 불필요. `tx_event_root` 계산은 BTIP16 단일 정의이고, 발신 ccApp·네트워크가 동일 정의·동일 입력을 쓰면 결정론적으로 동일. 별도 보장 문구 불필요.
+
+### 파일 변경 (2026-05-27)
+- **btip-26/34**: 결과 콜백에 핸들러 인자 추가 + Escrow 섹션에 의도한-핸들러 바인딩 의무.
+- **btip-21/29**: `onResult`/`OnResult`가 핸들러를 콜백으로 포워딩 + 라우팅 설명 갱신.
+- **btip-24/33**: #4 NOTE.
+- **btip-28/32**: stale 참조 → btip-39 정합 + H₀ admin-trust 명문화(`btips.md` 2026-05-27 참조).
+
+> **관련 미구현 연구**: BPuN-origin "이벤트→BPrN 결제" 서비스(payer 인가, 화이트리스트 회피, payer=msg.sender, allowance 모델 등)는 `./bpun-origin-payment-design.md`에 별도 정리. 2PC와 인접하나 아직 설계 탐색 단계라 분리.

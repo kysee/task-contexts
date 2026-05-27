@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-26
+last_updated: 2026-05-27
 ---
 
 # BTIPS 작업 컨텍스트
@@ -189,7 +189,43 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 
 ## 세션별 완료 작업
 
+### 2026-05-27
+
+> 이 세션은 **설계 점검 + 2PC 보안 보강(문서)** 중심. BPuN-origin "이벤트→BPrN 결제" 서비스 설계 연구는 분량이 많아 별도 파일 `./bpun-origin-payment-design.md`에 정리(미구현, 다음 세션 이어가기용). 2PC 결정의 의도는 `./btips-2pc-design.md` §9 참조.
+
+#### ✅ BPuN→BPrN 방향 설계 완결성 점검
+
+"BPrN→BPuN은 됐는데 BPuN→BPrN도 다 됐나?" 점검. 결론: **핵심 설계(btip-27/28/29/31/32/33/34/35/39)는 닫혀 있음**(btip-28에 Prover 알고리즘·검증 절차 포함), on-bprn 체인코드도 스텁 없이 구현됨. 남은 건 대부분 **구현**(BPuN→BPrN 이벤트 Prover = `BPuNTxEventProofPayload` 생성기 미구현이 end-to-end의 결정적 미싱 피스)과 문서 정합:
+- (문서 갭) BPuN→BPrN 통합 개요 문서 부재(btip-20 "BPrN→BPuN" 대응 없음) — 보류.
+- (문서 정합) `BTIPS/README.md`에 BTIP-37/39(및 38 Reserved) 미등재 — 추후.
+- secp256k1 잔존 교정·btip-39은 이전 세션에 완료.
+
+#### ✅ btip-28 / btip-32 — stale 참조를 btip-39로 정합 + H₀ admin-trust 확정
+
+btip-28(L101, L430)·btip-32(L76, L148)이 "Validator Set 동기화는 별도 문서에서 다룬다 + Light Client **Sequential/Bisection**"이라고 서술했으나, 그 별도 문서는 이미 **btip-39**이고 btip-39은 Bisection을 기각·Sequential 전용으로 확정함. → 모두 **btip-39 참조로 갱신, "Bisection/Light Client/별도 문서" 표현 제거.** 동시에 **H₀(최초 신뢰 높이) = 관리자 `SetValidatorSet`(admin-trust), 이후 변경 = btip-39 `UpdateValidatorSet`(trustless)** 를 명문화.
+
+#### ✅ 2PC — 결과 콜백에 "핸들러 식별자" 추가 (#5a) — btip-21/26/29/34
+
+LinkerResult가 공식 LinkerEndpoint에서 나왔는지(출처 검증)는 막아도, **공식 엔드포인트를 악용해 정방향 증명을 "항상 거부하는" 핸들러에 흘리면** 의도와 다른 결과로 에스크로가 잘못 settle/refund되는 griefing이 가능. 이를 막기 위해:
+- `handleLinkerResult`(btip-26) / `HandleLinkerResult`(btip-34) 시그니처에 **핸들러 식별자**(`handlerCcApp` / `handlerDApp`) 인자 추가.
+- `onResult`(btip-21)는 `LinkerResultElems`의 `appChaincodeID`(gidx:8)를, `OnResult`(btip-29)는 `LinkerResult`의 `dApp`을 꺼내 콜백으로 전달. **이벤트 정의는 이미 핸들러 필드를 보유 → 정의 변경 없음, 콜백 포워딩만.**
+- 발신 앱은 lock 시점에 **의도한 핸들러**를 기록하고, 콜백의 핸들러와 일치할 때만 완결(앱 책임). 설계 근거는 `./btips-2pc-design.md` §9.
+
+#### ✅ Nullifier 소비 단위 확정 (#4) — btip-24 / btip-33
+
+Nullifier는 `(root, app)`당 **정확히 1회 소비**(요소/속성별 세분화 아님)임을 양방향(btip-24 `(tx_event_root, dApp)`, btip-33 `(event_attrs_root, appChaincodeID)`)에 NOTE로 명문화. 필요한 요소는 한 증명에 모두 포함해야 함.
+
 ### 2026-05-26
+
+#### ✅ btip-37 부록 — BPrN 식별자를 HLF 네이티브 string으로 개정 (구현 세션)
+
+BTIP-37 Appendix(BPrN Chaincode Equivalent) 인터페이스를 `bytes32 chainId` / `keccak256 role` / 20B `address` → **HLF 네이티브 string**(`channelID` / 역할 이름 / `chaincodeID`)으로 변경.
+
+- 근거: Fabric은 체인코드를 `(channelID, chaincodeID)` 문자열로 식별하고 `InvokeChaincode`/`SignedProposal`가 모두 string 기반. BTIP-9의 20B 파생 주소는 단방향 해시(`sha256(channelId+chaincodeId)`)라 `InvokeChaincode`에 필요한 이름으로 역산 불가.
+- 서술 간결화(사용자 요청): BTIP-9/keccak/"왜 다른지" 구구절절 제거 → "BPuN과 식별자 타입이 다르므로 아래와 같이 정리" + 3줄 매핑(channelID/role/chaincodeID string) + Go 인터페이스 + X.509 admin 한 줄.
+- on-bprn 구현도 이에 맞춰 정합화(레지스트리 값=체인코드 이름 string, 체인코드 간 호출을 레지스트리 `ResolveContract`로 통합, 개별 SetXxxID 제거→단일 SetRegistryID). 코드 상세는 `./linker-v2.md` 2026-05-26 구현 세션 참조.
+
+> 같은 날 진행한 코드 구현(BTIP-37/39 구현, secp256k1, BTIP-39 Prover, tendermint 라이브러리 직접 호출 정합 등) 전체는 `./linker-v2.md` 참조. 본 항목은 그 중 btips 문서에 반영된 변경만 기록.
 
 #### ✅ btip-28/31/32 — BPuN Validator 서명 알고리즘 secp256k1 교정
 
