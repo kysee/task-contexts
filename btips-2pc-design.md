@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-27
+last_updated: 2026-05-28
 related: ./btips.md
 ---
 
@@ -230,6 +230,7 @@ setContract(bytes32 chainId, bytes32 role, address contractAddr)
 - `onResult`는 `LinkerResultElems.appChaincodeID`(gidx:8), `OnResult`는 `LinkerResult.dApp`을 꺼내 콜백으로 포워딩. **이벤트 정의는 이미 핸들러 필드를 보유 → 정의 변경 0, 콜백 인자+포워딩만.**
 - **신뢰성**: 핸들러 필드는 공식 엔드포인트가 "자기가 호출한 대상"을 정직히 기록 + 증명·출처검증으로 위조 불가. → `handlerDApp == 의도한 dApp`인 결과를 얻으려면 *실제로* 그 dApp에 라우팅해야 하고, 그건 진짜 판정.
 - **앱 책임(분담)**: 프로토콜은 "누가 판정했나"를 위조불가하게 공급. "누가 판정*해야* 하나(intended handler)"는 **앱이 lock 시점에 기록**하고 콜백에서 비교(불일치 시 무시). 이는 origin의 "의도한 핸들러" 설정의 거울상이며, 자금 risk를 지는 쪽이 per-instance로 소유 — LinkerRegistry는 비즈니스 dApp을 담지 않으므로 레지스트리로 대체 불가.
+- **누가 intended handler를 결정하는가**: 본 #5a는 *기록 의무*만 정의. *누가 그 값을 정하는가*는 use case에 따라 다름 — dApp-orchestrated는 dApp이 사전 설정(immutable/owner-set), user-driven payment는 사용자 입력(Web2 결제 패턴, 1:N 시나리오에 필수). 1:N에서 사전 등록 모델이 깨지는 이유·user-input phishing 재해석은 `./bpun-origin-payment-design.md` §12.3 참조.
 
 ### #4 — Nullifier 소비 단위 = (root, app)당 1회로 확정 (구현됨, 문서)
 

@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-27
+last_updated: 2026-05-28
 status: 설계 탐색 중 (미구현)
 related: ./btips.md, ./btips-2pc-design.md
 ---
@@ -7,6 +7,8 @@ related: ./btips.md, ./btips-2pc-design.md
 # BPuN-origin "이벤트 → BPrN 결제" 서비스 설계 연구
 
 > 2026-05-27 세션의 설계 논의·검토 대안·결정·발견한 함정을 자기완결적으로 정리. **아직 미구현(설계 탐색 단계)** 이며 다음 세션에서 이어가기 위한 노트. 인접 주제(2PC)의 확정 사항은 `./btips-2pc-design.md` §9 참조.
+>
+> **2026-05-28 업데이트**: §11(use-case independent reframing — `Pay` → `publish` 리네임, 두 층 분리, 파라미터 Model A 확정), §12(BPrN-origin STC use case 분석 — IntendedHandler 결정 패턴, timeout 불필요 검증, phishing 분석) 추가. §10은 부분 해결 표시 + 신규 OPEN 항목 추가. §7의 `Pay` 어휘는 `publish`로 대체됨.
 
 ---
 
@@ -62,6 +64,8 @@ related: ./btips.md, ./btips-2pc-design.md
 
 ## 7. 정규 `LinkerEndpoint.Pay` 제안 (노드 변경 없이 contract-payer 해결) — 유력
 
+> **2026-05-28 업데이트**: `Pay`는 결제 편향이라 use-case independent한 `publish`로 변경. 메소드 시그니처·이벤트 구조·두 층 분리(`LinkerApp._lkPublish` 추가)는 §11 참조. 본 절은 *historical 탐색* 기록으로 유지.
+
 dApp이 X를 직접 emit하지 않고 **`LinkerEndpoint.Pay(payer, payee, amount, …)`** 를 호출. Pay가 이벤트를 emit:
 - `contractAddress == LinkerEndpoint`(정규, 레지스트리 조회), `topic.0 == X sig`, `topic.1 == dApp(=Pay의 msg.sender)`, `topic.2 == payer`, `topic.3 == payee`, `data == amount`.
 - **핵심 장점**: dApp(=msg.sender)을 **Solidity에서 캡처** → §6의 노드/OnOpcode 변경 **불필요**.
@@ -87,8 +91,161 @@ dApp이 X를 직접 emit하지 않고 **`LinkerEndpoint.Pay(payer, payee, amount
 
 ## 10. 미해결/다음 세션 할 일 (OPEN)
 
-1. **OnOpcode 기반 msg.sender 캡처 재검토**(§6, parked) — (i) 정규 Pay 방식으로 충분한지 vs 노드 노출이 필요한 케이스가 있는지.
-2. **정규 `LinkerEndpoint.Pay` 스펙 확정**: 시그니처, 이벤트 topic 배치, BPrN 인가 로직(`payer==requestedBy || allowance || EIP-712`). 새 BTIP로 둘지 btip-21/26/34 확장으로 둘지.
-3. **크로스체인 신원/주소 통일**: payer(BPrN 자금 계정)·requestedBy(dApp 주소)가 같은 주소 네임스페이스(ethereum-style/BTIP-9)여야 `allowance[payer][requestedBy]`가 양쪽에서 의미. `approve`는 자금이 있는 BPrN에서(크로스체인 승인은 별도 확장?).
-4. **payer 의미 확정**: "X의 트리거러" 강제(→ msg.sender 노출 필요) vs "사전 인가한 자금 소유자"(→ allowance/조건부 에스크로). 현재 무게추는 **allowance 모델(=자금 소유자 인가)**.
-5. Nullifier로 동일 이벤트 재생 방지 → allowance 이중 차감 방지(설계에 반영 필요).
+> 2026-05-28 업데이트: 항목 2/4·일부는 §11/§12에서 부분 해결. 신규 항목 6~9 추가.
+
+1. **OnOpcode 기반 msg.sender 캡처 재검토**(§6, parked) — `publish` 방식으로 충분한지 vs 노드 노출이 필요한 케이스가 있는지. *변경 없음, 여전히 parked.*
+2. ~~**정규 `LinkerEndpoint.Pay` 스펙 확정**~~: §11에서 `publish`로 리네임 + Model A 파라미터 확정. **남는 세부**(아래 7): `actionSelector` first-class 여부, `LinkerPublish` 이벤트 topic 배치, return value, 새 BTIP로 둘지 btip-21 확장.
+3. **크로스체인 신원/주소 통일**: payer(BPrN 자금 계정)·requestedBy(dApp 주소)가 같은 주소 네임스페이스여야 `allowance[payer][requestedBy]`가 양쪽에서 의미. *부분 해결* — `block.chainid` + `msg.sender` + BTIP-9 derived 20B address 통일 방향(§11.3). `approve` 동기화는 미정.
+4. ~~**payer 의미 확정**~~: §12에서 use case별 결정 — dApp-orchestrated는 dApp-configured, user-driven payment는 user-input. **사용자 입력 phishing은 protocol 외부**(§12.6).
+5. **Nullifier로 재생 방지 → 이중 차감 방지**: existing BTIP-24/33 패턴(`(eventRoot, dApp)` per-pair) 그대로. 별도 작업 불요.
+
+**신규 OPEN** (§11/§12에서 파생):
+
+6. **LinkerApp base 컨트랙트 스펙** (§11.2 후속): BTIP-26 범위 확장 vs 신규 BTIP, 상속 optional, endpoint 주소 출처(생성자 vs BTIP-37 동적 조회), BPrN 대칭(BTIP-34), payload 인코딩 규약.
+7. **`publish` 함수 세부** (§11.3 후속): `actionSelector` first-class vs `actionData`에 packed, `LinkerPublish` 이벤트 topic 배치, return value 형식(`bytes32 messageId` 등).
+8. **STC use case 측 미해결** (§12 후속, 사용자가 "지금 논의하지 말고"한 항목): (a) settle 시 STC 행선지(burn / payee 계정 / 응답 데이터 중 어느 것), (b) PaymentBridge ccApp 분리 vs STC 통합 결정, (c) `approve`의 BPrN/BPuN 동기화 모델.
+9. **BTIP-26/34 Escrow Lifecycle 섹션에 IntendedHandler 결정 패턴 권장 명문화**: dApp-orchestrated → dApp-configured, user-driven payment → user-input + payee_account 함께 입력 등 가이드.
+
+---
+
+## 11. (2026-05-28) `Pay` → `publish` 리네임 + 파라미터 확정
+
+본 문서가 "결제(payment)" 어휘에 과도하게 묶여 일반화 필요성 제기. §7의 `LinkerEndpoint.Pay`는 결제만이 아니라 NFT mint, 거버넌스 투표, 데이터 업데이트 등 **임의 cross-chain 액션 트리거**의 도구로 정의되어야 함. 이름·인터페이스를 use-case independent로 재정의.
+
+### 11.1 메소드 이름 — `publish` 채택
+
+검토 후보 및 결과:
+
+| 후보 | 평가 | 결과 |
+|---|---|---|
+| `Pay` | 결제 편향, 너무 좁음 | 기각 |
+| `Invoke` / `Request` | 너무 일반적, dApp 메소드와 충돌 가능 | 기각 |
+| `submitProof` / `submitLinkerProof` | "proof"가 잘못된 단계에 붙음 — publish 시점엔 proof 미존재(Prover가 나중에 구성). 기존 `onProof` 수신측과 의미 충돌. "submit" + `onProof`의 짝(sender↔receiver) 혼동 | 기각 |
+| `linkerEmit` / `linkerSend` | 본질은 표현하지만 컨트랙트명(`LinkerEndpoint`)과 메소드 prefix 중복 ("linker" 두 번) | 기각 |
+| `lkEmit` / `lnkEmit` (LayerZero `_lz` 미러) | 컨트랙트 풀워드↔메소드 약어 비대칭. `lnk`는 Chainlink LINK 토큰과 혼동 위험. LayerZero `_lz`가 통하는 이유는 inherited base namespace 용 — 외부 endpoint 메소드엔 부적합 | 기각 |
+| **`publish`** (prefix 없음) | "공개 원장에 게시" 본질 표현. 기존 `onProof`/`onResult`와 동일 prefix-없는 컨벤션. 다른 cross-chain 프로토콜과 어휘 겹치지 않아 BEATOZ 특색 | ✅ 채택 |
+
+**채택 근거**: BTIP-21 기존 메소드 모두 prefix 없는 동사(`onProof`/`onResult`/`setNullifierContract`/`setVerifierContract`). 컨트랙트명이 namespace 제공하므로 메소드 prefix 불요 — ERC-20 `IERC20.transfer`/`approve`도 같은 관례. LayerZero V1 external endpoint도 `Endpoint.send`로 prefix 없음.
+
+### 11.2 두 층 분리 — `LinkerEndpoint.publish` + `LinkerApp._lkPublish`
+
+LayerZero V1 `LzApp.sol` / V2 `OApp.sol` 패턴 미러:
+
+| 층위 | 위치 | 이름 | 호출 형태 |
+|---|---|---|---|
+| 외부 endpoint 메소드 | `LinkerEndpoint` external 함수 | `publish(...)` | `ILinkerEndpoint(linker).publish(...)` |
+| 상속 base 헬퍼 | `LinkerApp` 추상 base | `_lkPublish(...)` | `_lkPublish(...)` (dApp 내부 호출) |
+
+**`_lkPublish`의 `lk` 접두사가 여기서는 적절한 이유**: dApp 자체 internal 메소드와 같은 namespace(상속)에 들어가므로 LayerZero `_lzSend`와 동일한 충돌 회피 마커 역할. 외부 호출과 달리 컨트랙트 풀워드↔약어 비대칭 발생 없음. Solidity 관례상 internal 함수는 `_` 접두 — `_lkPublish`로 표기.
+
+LinkerApp base 컨트랙트 추가 결정사항은 §10-6으로 이월:
+- BTIP-26 범위 확장 vs 신규 BTIP
+- 상속은 optional (interface만 구현해도 동작 — LayerZero V2 OApp도 마찬가지)
+- LinkerEndpoint 주소 출처 (생성자 hardcode vs BTIP-37 registry 동적 조회 — 후자 추천: 재배포·진본성에 강함)
+- BPrN 대칭 (BTIP-34에 어떻게 미러할지 — Go embedding/composition)
+- payload 인코딩 규약
+
+### 11.3 `publish` 파라미터 — Model A (open destination)
+
+두 모델 비교:
+
+| 모델 | 시그니처 | 평가 |
+|---|---|---|
+| **A. Open destination** | `publish(bytes32 actionSelector, bytes calldata actionData)` | ✅ 채택 |
+| B. Explicit destination | `publish(bytes32 dstChainId, address dstContract, bytes32 actionSelector, bytes calldata actionData)` | 기각 |
+
+**Model A 채택 근거**:
+- 기존 BPrN→BPuN 흐름과 대칭 — `TransferEventElems`는 destination 필드 없음, `onProof(payload, targetDApp)`에서 Prover가 destination 지정. 같은 패턴을 BPuN→BPrN에도 적용.
+- `dstContract`를 이벤트에 박아도 LinkerEndpoint는 on-chain routing 안 함 — 정보적 필드일 뿐. 강제하려면 상대 LinkerEndpoint가 추가 검증 필요(복잡성 증가, 기존 흐름과 비대칭).
+- Destination 안전성은 **app-level auth(allowance/permit, IntendedHandler 비교)** 가 담당하는 게 정석. ERC-20 `transferFrom`도 token 컨트랙트가 caller 의도를 검증하지 않고 allowance만 확인 — 같은 정신.
+- LayerZero V2가 `dstEid`를 first-class로 두는 이유는 endpoint 내부 on-chain routing/fee 계산 때문. BEATOZ는 그런 layer 없음 — Prover가 off-chain routing.
+
+**자동으로 채워지는 src 정보** (파라미터 불요):
+- `srcChainId = block.chainid` → EVM 자동 → Tendermint `CanonicalVote.chain_id`에 포함 → Validator 서명으로 암호학적 검증 → 상대 LinkerEndpoint가 proof에서 추출 → BTIP-34 `HandleLinkerEvent.srcChainId` 파라미터로 전달
+- `srcContract = msg.sender` → Solidity 자동 캡처 → 이벤트 indexed topic
+- `contractAddress` (event index 0) = LinkerEndpoint 자기 주소 → BTIP-37 LinkerRegistry로 진본 검증
+
+**남는 결정** (§10-7로 이월):
+- `actionSelector` first-class 유지 vs `actionData`에 packed (LayerZero V2처럼)
+- 발행되는 `LinkerPublish` 이벤트의 topic 배치 (indexed 슬롯 3개 어떻게 쓸지)
+- return value (`bytes32 messageId` 등 반환할지)
+
+---
+
+## 12. BPrN-origin mirror — STC use case 분석 (2026-05-28)
+
+본 문서의 BPuN-origin 분석과 대칭으로, BPrN-origin 사례를 STC(stablecoin) use case로 검토. **IntendedHandler 결정 패턴**의 일반 원리 도출.
+
+### 12.1 시나리오
+
+- BPrN에 STC(stablecoin) ccApp 1개
+- BPuN에 결제를 받는 dApp 다수 (NFT 마켓, 게임, 구독 서비스 등)
+- 흐름: 사용자가 STC로 dAppX에 결제 → 증명이 BPuN으로 전달(누구든 제출 가능) → dAppX가 NFT 발행 등 가치 제공
+
+→ **1:N 관계** (one STC, many dApps).
+
+### 12.2 등록 모델은 1:N에 부적합
+
+§3 결정 1 / btips-2pc-design.md §9 #5a(IntendedHandler binding)의 자연스러운 첫 발상: "STC가 신뢰하는 BPuN dApp을 사전 등록". 그러나:
+- 운영 부담 — 새 dApp마다 STC admin 거버넌스 절차
+- STC가 비즈니스 의사결정자가 됨 — permissionless 생태계와 정반대
+- N이 커질수록 운영 불가능
+
+→ **등록 모델 부적합 확정.** 이게 BPuN-origin(§7 본문 가정)과 본질적으로 다른 점.
+
+### 12.3 IntendedHandler 결정 주체 — use case별 차이
+
+btips-2pc-design.md §9 #5a 원칙("자금 risk 지는 source가 lock 시점에 destination 사전 기록")은 유지. 다만 *누가* destination을 결정하느냐는 use case에 따라 다름:
+
+| Use case 유형 | destination 결정자 | 근거 |
+|---|---|---|
+| **dApp-orchestrated action** (BPuN dApp이 자기 BPrN partner와 협업) | dApp이 사전 설정 (immutable / owner-set) | 사용자는 destination을 모름·검증 능력 없음. dApp이 자기 partner를 알고 신뢰. |
+| **User-driven payment** (사용자가 직접 수취인 선택) | **사용자 입력** | 사용자가 *수취인 선택의 주체*. Web2 결제(가게 계좌번호 입력)와 본질 동일. |
+
+→ STC use case는 후자. **사용자 입력**으로 IntendedHandler 설정이 정합.
+
+**"User-input phishing" 재해석**: 이전 §8/§7 우려는 dApp-orchestrated 시나리오 가정. User-driven payment에선 사용자가 *원래 수취인 직접 선택*이므로 잘못 지정해도 Web2 phishing과 동일 수준 — cross-chain 고유 공격 벡터 아님.
+
+### 12.4 아키텍처 — 2개 비교, Architecture 2 채택
+
+| 항목 | 아키텍처 1 (Fire-and-forget) | 아키텍처 2 (STC 2PC pay) |
+|---|---|---|
+| STC 측 함수 | transfer만 (현 BTIP-25 그대로) | `PayTo(targetDApp, amount, ...)` + escrow + `HandleLinkerResult` |
+| dApp 등록 | 불요 | 불요 |
+| 1:N 지원 | ◎ | ◎ |
+| dApp 거부 시 보호 | 없음 (사용자 STC 손실) | refund 보장 (2PC) |
+| 적합 환경 | 평판·계약 등 off-chain 보호 충분 | permissionless·dApp 미신뢰 |
+
+→ **아키텍처 2 채택** (사용자 자금 보호 우선).
+
+### 12.5 Timeout 우려 검증 — 불필요
+
+이전 분석에서 "사용자가 잘못된 dApp 주소를 입력하면 escrow 영구 LOCKED" 우려 제기. 재검토:
+- 누구든(특히 사용자 본인) proof를 self-submit 가능 (permissionless)
+- LinkerEndpoint try/catch:
+  - 존재하지 않는 주소 → call revert → catch → **REJECTED** 발행
+  - 정직한 잘못된 dApp → revert → **REJECTED** 발행
+- LinkerResult: handler = 사용자가 지정한 잘못된 주소 == IntendedHandler → 일치 → REJECTED → **refund**
+
+→ Self-submit으로 escrow 자동 환불. **Timeout/cancel 도입 불필요.** btips-2pc-design.md §3 결정 4("타임아웃 없음") 유지.
+
+### 12.6 남는 위험 — Phishing dApp이 ACCEPT
+
+User-input 시나리오에서 protocol-level 해결 불가한 유일한 경로:
+1. 사용자가 phishing dApp 주소를 IntendedHandler로 지정 (가짜 사이트에 속아서)
+2. Phisher가 proof를 자기 자신에 제출 → ACCEPTED 반환 (자금 탈취 목적)
+3. LinkerResult: handler = phisher, ACCEPTED
+4. STC: handler == IntendedHandler → 일치 → settle → 자금 phisher 측으로
+
+이 경로는 protocol 검증 모두 통과. 사용자가 *의도적으로* phisher 지정했기 때문. Web2/Web3 표준 결제 phishing과 본질 동일 (`approve(phisher, MAX)`, `transfer(phisher, amount)`):
+> 사용자 의도 결정 → 프로토콜이 의도대로 실행 → 의도가 잘못된 거면 사용자 손해
+
+**완화는 protocol 밖 계층** — Wallet UI(주소 자동완성, phishing 경고, dApp 메타데이터 표시), dApp 식별(ENS-style naming, code hash 비교), 사용자 교육, 평판 시스템. **BEATOZ Linker Protocol 스펙엔 추가 안 함.** 단 BTIP-26/34 Escrow Lifecycle 섹션에 IntendedHandler 결정 패턴 권장 명문화 가능 (§10-9).
+
+### 12.7 양방향 통합 원칙 (재확인)
+
+방향(BPuN-origin / BPrN-origin)·use case(orchestration / payment)와 무관하게 동일 원칙:
+
+> **자금/리소스 risk를 지는 source 측 컨트랙트가, 자기가 신뢰하는 destination을 lock 시점에 사전 기록한다. 사용자는 source 측 컨트랙트를 신뢰하는 것으로 충분 — destination 자체를 직접 검증할 책임은 없다.**
+
+btips-2pc-design.md §9 #5a 책임 분담 재확인. 차이는 *destination 결정 주체*뿐 (dApp인지 사용자인지).
