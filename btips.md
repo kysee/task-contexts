@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-27
+last_updated: 2026-05-28
 ---
 
 # BTIPS 작업 컨텍스트
@@ -23,7 +23,7 @@ BEATOZ Linker Protocol V2의 양방향 크로스체인 증명 체계 설계.
 Root CA → 인증서 체인 → 블록 커밋 서명 → block_event_root → event_log_root → 개별 이벤트
 ```
 
-### TxEventProofPayload (현행 — btip-19 기준)
+### BPrNTxEventProofPayload (현행 — btip-19 기준)
 
 ```text
 Structure MerkleProof<Leaf>:
@@ -31,7 +31,7 @@ Structure MerkleProof<Leaf>:
     Property leaf:     Leaf
     Property siblings: Array of ByteArray
 
-Structure TxEventProofPayload:
+Structure BPrNTxEventProofPayload:
     Property block_number:          Integer
     Property mspids:                Array of String
     Property cert_chains: Array of Array of ByteArray
@@ -188,6 +188,95 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 ---
 
 ## 세션별 완료 작업
+
+### 2026-05-28 (네이밍 정합) — commit: `docs: Normalize BTIP naming conventions`
+
+> 본 세션은 BTIP 문서 전반의 네이밍 컨벤션 일관성 정리에 집중. 양방향(BPrN/BPuN) 대칭, BPuN Solidity contract vs BPrN chaincode 구분, BTIP 번호 동반 여부에 따른 접미사 규칙 정착이 핵심.
+
+#### ✅ 자료구조명에 BPrN 접두사 추가 — BPuN 측과 대칭
+
+- `TxEventProofPayload` → `BPrNTxEventProofPayload` (btip-19/20/21/24). BPuN 측 `BPuNTxEventProofPayload`와 대칭.
+- Solidity 구조체 `TxEventProof` → `BPrNTxEventProof` (btip-21/23). 위 페이로드의 Solidity 정의.
+- **substring 충돌 함정**: `BPuNTxEventProofPayload`도 `TxEventProofPayload` substring을 포함하므로 단순 `replace_all`은 `BPuNBPrNTxEventProofPayload` 오염을 만듬. word-boundary sed(`\bTxEventProof\b`) 또는 사전 BPuN 카운트 확인 필수. 1차 시도에서 task-contexts/btips.md에 오염 9곳 발생 → 즉시 복구.
+
+#### ✅ BTIP-26/34 제목 LinkerApp 도입
+
+- BTIP-26: `Application Contract interface for Linker Protocol V2 on BPuN` → `LinkerApp interface on BPuN`
+- BTIP-34: `Chaincode Interface for Linker Protocol V2 on BPrN` → `LinkerApp interface on BPrN`
+- 근거: LayerZero V2의 `OApp(Omnichain Application)` 패턴을 BEATOZ의 `Linker<X>` 컨벤션으로 흡수. LayerZero V1의 모호한 "User Application(UA)"에서 V2의 짧고 브랜드성 있는 "OApp"으로 진화한 흐름 참고. 후보 `LinkerApplication`(풀워드)·`LApp`(터스, OApp 미러)과의 절충안.
+- BTIP-10(V1)은 V2 정리 범위 밖이라 기존 제목 유지.
+
+#### ✅ 제목 (V2) 제거 + BPuN/BPrN 대칭
+
+- btip-21/23: 제목·README에서 `(V2)` 제거 (`LinkerEndpoint(V2) interface on BPuN` → `LinkerEndpoint interface on BPuN`).
+- btip-29/31/32/33/34: 제목·README·코드 블록 주석에서 `Chaincode on BPrN` → `interface on BPrN`.
+- 결과: BPuN ↔ BPrN 제목이 완전 대칭 — `LinkerXxx interface on {BPuN, BPrN}`.
+
+```
+BPuN                                BPrN
+─────────────────────────────────   ─────────────────────────────────
+LinkerEndpoint interface on BPuN ↔ LinkerEndpoint interface on BPrN
+LinkerVerifier interface on BPuN ↔ LinkerVerifier interface on BPrN
+LinkerNullifier interface on BPuN ↔ LinkerNullifier interface on BPrN
+                  (LinkerPolicy는 BPrN 측에만)
+LinkerApp interface on BPuN      ↔ LinkerApp interface on BPrN
+```
+
+#### ✅ Prose 컨벤션 정착 — BTIP번호 동반 시 bare, standalone 시 Chaincode 부착
+
+- 규칙: `BTIP번호(LinkerXxx)` 형태(예: `BTIP29(LinkerEndpoint)`)는 BTIP 번호로 식별되므로 bare. 그 외 standalone prose 참조는 `LinkerEndpoint Chaincode` 형태로 Chaincode 부착(BPuN Solidity contract와 disambiguation).
+- 적용: btip-29/31/32/33/34/39 prose 12+곳.
+- 예외 (변경 없음): `BPuN LinkerEndpoint` 등 BPuN-qualified 참조, pseudocode 메소드 호출(`LinkerNullifier.IsProcessed(...)` 등 call target), 이미 한글 "체인코드" 동반된 곳.
+- 트리플 standalone(btip-29 L286 `LinkerVerifier·LinkerNullifier·LinkerRegistry`)도 규칙 일관성 우선해 셋 다 Chaincode 부착. verbose하지만 통일성 유지, 향후 가독성 리팩토링 여지.
+
+#### ✅ README에 누락 BTIP 번호 Reserved 추가
+
+- BTIP15, BTIP18, BTIP22를 Reserved 행으로 신규 추가 (기존 BTIP30/38 Reserved 패턴과 동일).
+- 결과: BTIP09~39 범위 내 모든 번호가 README에 등장.
+
+#### 부수 작업
+
+- task-contexts/btips.md의 `TxEventProofPayload` 6곳 동기화.
+- 본 컨텍스트 파일의 "파일 상태 요약" 표(btip-29/31/32/33/34) 신규 제목으로 갱신. 표 안의 `ValidatorSetRegistry Chaincode on BPrN`(이전 세션의 stale 잔존)도 현재 `LinkerPolicy interface on BPrN`로 동시 정정.
+
+#### 보류 / 향후
+
+- linker-v2 코드(on-bpun Solidity 구조체명, on-bprn Go 인터페이스)는 본 turn 변경 범위 밖. 추후 구현 동기화 단계에서 새 컨벤션(`BPrNTxEventProof`, `LinkerApp`, 제목 패턴 등) 적용 필요.
+
+---
+
+### 2026-05-28
+
+> 이 세션은 **자잘한 문서 정합** 중심. 전체 BTIP 문서·구현 현황 재분석 후 누락된 문서 작업 2건 완료. 주요 부수 발견: linker-v2.md에 "✅ 완료"로 기록된 on-bprn 레지스트리 기반 리팩토링이 실제 Go 코드에 미반영 상태.
+
+#### ✅ BTIPS/README.md — BTIP37/38(Reserved)/39 등재
+
+2026-05-21 이후 추가된 BTIP들이 README 테이블에 누락돼 있었음. 아래 3행 추가:
+
+| BTIP37 | LinkerRegistry interface (BPuN + BPrN) |
+| BTIP38 | (Reserved) |
+| BTIP39 | BPuN Validator Set Update Proof |
+
+#### ✅ btip-29 문서 정합 — SetRegistryID 단일화 반영
+
+on-bprn 레지스트리 기반 리팩토링(2026-05-26 구현 세션에서 설계 확정)을 btip-29 BTIP 문서에 반영.
+
+**변경 내역**:
+- `requires`: `btip28, btip34` → `btip28, btip34, btip37`
+- Chaincode Interface: `SetVerifierChaincodeID` + `SetNullifierChaincodeID` 제거 → `SetRegistryID` 단일 메소드로 교체
+- 메소드 설명: 단일 부트스트랩 포인터 역할 명시 (LinkerVerifier·LinkerNullifier ID는 레지스트리를 통해 동적 조회)
+- OnProof 구현 설명: "컴포넌트 조회" 항목 추가 (`ResolveContract(VERIFIER/NULLIFIER)`)
+- OnResult 구현 설명: "컴포넌트 조회" 항목 추가 + BPuN 공식 엔드포인트 조회는 `GetContract(payload.ChainID, LINKER_ENDPOINT)`임을 명시
+
+#### ⚠️ 부수 발견 — on-bprn 코드-문서 불일치
+
+linker-v2.md 2026-05-26 항목에 "✅ 체인코드 간 호출을 레지스트리 기반으로 통합"으로 기록돼 있으나, **실제 Go 코드는 변경되지 않은 상태**:
+- `linker-endpoint/main.go`: `SetVerifierChaincodeID` / `SetNullifierChaincodeID` 아직 존재
+- `linker-verifier/main.go`: `SetLinkerPolicyID` 아직 존재
+- `linker-nullifier/main.go`: `SetLinkerEndpointID` 아직 존재
+- `types/registry.go`: 존재하지 않음 (`SetRegistryID` / `ResolveContract` 미구현)
+
+→ BTIP 문서는 의도된 설계 기준으로 갱신 완료. 코드 구현은 별도 작업으로 진행 필요.
 
 ### 2026-05-27
 
@@ -710,7 +799,7 @@ BPrN-origin의 거울상(BPuN 발신 → BPrN 앱 체인코드 처리 → 결과
 #### ✅ btip-17, 19, 20, 21, 23 — Block Commit Signature에 block_height 추가
 
 - btip-17: 서명 입력 변경 `Sign(PrivKey, block_event_root)` → `Sign(PrivKey, block_height || block_event_root)`
-- btip-19: `TxEventProofPayload`에 `block_number` 필드 추가, Step 4 서명 검증 로직 수정
+- btip-19: `BPrNTxEventProofPayload`에 `block_number` 필드 추가, Step 4 서명 검증 로직 수정
 - btip-21: `TxEventProof` Solidity 구조체에 `uint64 block_number` 추가
 - btip-23: `beatoz_p256Verify` 설명에 `block_height || block_event_root` 서명 원문 반영
 - btip-20: 블록 커밋 서명 검증 설명 업데이트
@@ -830,9 +919,9 @@ BPrN-origin의 거울상(BPuN 발신 → BPrN 앱 체인코드 처리 → 결과
 
 ### 2026-04-06
 
-#### ✅ TxEventProofPayload에 `mspids` 필드 추가 — 조직별 Root CA 조회
+#### ✅ BPrNTxEventProofPayload에 `mspids` 필드 추가 — 조직별 Root CA 조회
 
-- `TxEventProofPayload`에 `mspids: Array of String` 필드 추가 (btip-19)
+- `BPrNTxEventProofPayload`에 `mspids: Array of String` 필드 추가 (btip-19)
 - `mspids[i]`로 `cert_chains[i]`에 대응하는 보증 피어의 조직 MSP ID를 식별
 - `verify_event_proof` Step 2: `LinkerPolicy.get_root_ca(payload.mspids[i])`로 조직별 Root CA 조회
 - `create_event_proof`: `mspids = [e.mspid for e in target_tx.endorsements]` 추출 추가
@@ -970,11 +1059,11 @@ BPrN-origin의 거울상(BPuN 발신 → BPrN 앱 체인코드 처리 → 결과
 | `btip-26.md` | ✅ 수정 완료 | BTIP26 interface — `handleLinkerEvent(srcBlockNumber, srcTxIndex, indices, values)`, 이벤트 출처 정보 인용문(gidx 통일) |
 | `btip-27.md` | ✅ 수정 완료 (btip-35 관련 롤백) | BPuN Event Structure — 2단계 머클 트리, leaf 해시 `sha256(value)`, 인덱스 기반 의미 결정. 이벤트 구성은 작성 시점(asyncExecTrxContextOld) 기준, btip-35에서 대체 |
 | `btip-28.md` | ✅ 수정 완료 | BPuN Tx/Event Proof — `EventAttrProof` 제거(MerkleProof로 통합), `sha256(leaf)` 리프 해시 |
-| `btip-29.md` | ✅ 수정 완료 | LinkerEndpoint Chaincode on BPrN — MerkleProof 사용, `HandleLinkerEvent(srcChainId, srcBlockNumber, srcTxIndex, indices, values)` 호출 |
-| `btip-31.md` | ✅ 수정 완료 | LinkerVerifier Chaincode on BPrN — `sha256(proof.Leaf)` 리프 재구성 (BTIP23 대응) |
-| `btip-32.md` | ✅ 신규 | ValidatorSetRegistry Chaincode on BPrN — `type BTIP32 interface` (BTIP22 대응) |
-| `btip-33.md` | ✅ 수정 완료 | LinkerNullifier Chaincode on BPrN — `type BTIP33 interface`, `sha256(eventAttrsRoot\|\|chaincodeID)` (BTIP24 대응) |
-| `btip-34.md` | ✅ 수정 완료 | Chaincode Interface for Linker Protocol V2 on BPrN — `HandleLinkerEvent(srcChainId, srcBlockNumber, srcTxIndex, indices, values)`, 이벤트 출처 정보 인용문 (BTIP26 대응) |
+| `btip-29.md` | ✅ 수정 완료 | LinkerEndpoint interface on BPrN — MerkleProof 사용, `HandleLinkerEvent(srcChainId, srcBlockNumber, srcTxIndex, indices, values)` 호출 |
+| `btip-31.md` | ✅ 수정 완료 | LinkerVerifier interface on BPrN — `sha256(proof.Leaf)` 리프 재구성 (BTIP23 대응) |
+| `btip-32.md` | ✅ 신규 | LinkerPolicy interface on BPrN — `type BTIP32 interface` (BTIP22 대응) |
+| `btip-33.md` | ✅ 수정 완료 | LinkerNullifier interface on BPrN — `type BTIP33 interface`, `sha256(eventAttrsRoot\|\|chaincodeID)` (BTIP24 대응) |
+| `btip-34.md` | ✅ 수정 완료 | LinkerApp interface on BPrN — `HandleLinkerEvent(srcChainId, srcBlockNumber, srcTxIndex, indices, values)`, 이벤트 출처 정보 인용문 (BTIP26 대응) |
 | `btip-35.md` | ✅ 신규 | BPuN Transaction Event Definition — `"tx"` 4 attrs (type, sender, receiver, amount), `"evm"` 가변 attrs, 이벤트 순서, 실패 tx 처리 |
 
 ---
@@ -992,7 +1081,7 @@ BPrN-origin의 거울상(BPuN 발신 → BPrN 앱 체인코드 처리 → 결과
 ## verify_event_proof 현행 흐름 요약 (btip-19)
 
 ```python
-def verify_event_proof(payload: TxEventProofPayload):
+def verify_event_proof(payload: BPrNTxEventProofPayload):
     # Step 1. Nullifier 중복 검사
     # Step 2. 인증서 체인 검증 + CRL 확인 → get_root_ca_and_crl(mspids[i])로 조직별 Root CA + CRL 조회 → (serial_no, pubkey, ou) 수집
     # Step 3. 보증 정책 대조 (endorser_count, ous, serial_nos)
