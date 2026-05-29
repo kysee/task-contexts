@@ -189,6 +189,33 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 
 ## 세션별 완료 작업
 
+### 2026-05-28 (BTIP-37 LINKER_CCS NOTE 추가 + Pay→publish 설계 논의)
+
+> 본 세션은 BTIP 문서 변경은 BTIP-37에 NOTE 한 블록 추가만 있고, 대부분은 *향후 설계*를 위한 토론. 전체 설계 토론은 `../task-contexts/bpun-origin-payment-design.md` §11~§14 참조 — 그쪽이 *자기완결적 설계 노트*다. 본 항목은 BTIP doc에 반영된 부분만 정리.
+
+#### ✅ btip-37.md — LINKER_CCS role NOTE 추가 (minimal, BPuN-전용)
+
+Roles 테이블 뒤(L48-58)에 NOTE 블록 한 개만 삽입. 본문 인터페이스(`getContract`/`setContract`)·이벤트·에러·Appendix Go는 **손대지 않음**.
+
+**핵심 결정**:
+- 새 메소드/이벤트/에러 0건 — 기존 `getContract`/`setContract` 그대로 재사용
+- `LINKER_CCS`는 어플리케이션 주소별 **derived role**: `keccak256(abi.encodePacked("LinkerCCS", appAddr))`
+  - 등록: `setContract(chainId, role_for(appAddr), appAddr)` — 거버넌스 전용
+  - 조회: `getContract(chainId, role_for(appAddr))` — 등록되면 `appAddr` 반환
+  - 한 chainId에 N>1 어플리케이션 등록 자연스럽게 지원 (각 derived role이 다름). 상대 체인이 명확한 운영주체의 프라이빗 네트워크라 N은 작음.
+- **BPuN의 LinkerRegistry에만 존재** — BPrN의 LinkerRegistry에는 대칭 `LINKER_DAPPS` 없음. 근거: BPuN-origin 이벤트는 LinkerEndpoint 한 곳에서만 발생하므로 BPrN 수신측은 그 단일 컴포넌트 진본성만 확인하면 충분.
+- 어휘 추상화: 본문에 `LinkerEndpointCC`, `ccApp` 같은 미정의 구체 용어 사용 금지. "상대 체인의 비즈니스 어플리케이션"으로 표현.
+
+**경위**: 첫 시도는 `registerCCApp`/`unregisterCCApp`/`isCCAppRegistered` 3메소드 + 2events + 2errors 추가 (Abstract·Motivation·Conclusion·Appendix 전부 수정). 사용자 reject — "왜 이렇게 인터페이스가 많아", "미정의 용어 갑자기 나오면 안 됨", "그냥 LINKER_CCS role 하나만 추가". 5개 edit 전부 rollback 후 minimal NOTE-only로 재작성.
+
+#### 진행 중 / 향후 BTIP 작업 (bpun-origin-payment-design.md §14 OPEN 참조)
+
+- `LinkerEndpoint.publish(...)` 스펙 (BPuN, BTIP-21 확장 또는 신규 BTIP)
+- `LinkerApp._lkPublish(...)` 스펙 (상속 base, BTIP-26 확장 또는 신규 BTIP)
+- `LinkerEndpointCC.PreparePublish(...)` 스펙 (BPrN, BTIP-29 확장 또는 신규 BTIP) — payload format 정의·반환만, SetEvent는 ccApp이 (Fabric 제약)
+- `LinkerResult` event를 `LinkerPublish` event의 한 selector로 흡수 검토 (BPuN)
+- BTIP-25 (`TransferEventElems`) deprecation 시점
+
 ### 2026-05-28 (네이밍 정합) — commit: `docs: Normalize BTIP naming conventions`
 
 > 본 세션은 BTIP 문서 전반의 네이밍 컨벤션 일관성 정리에 집중. 양방향(BPrN/BPuN) 대칭, BPuN Solidity contract vs BPrN chaincode 구분, BTIP 번호 동반 여부에 따른 접미사 규칙 정착이 핵심.

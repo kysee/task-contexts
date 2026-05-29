@@ -249,3 +249,91 @@ User-input 시나리오에서 protocol-level 해결 불가한 유일한 경로:
 > **자금/리소스 risk를 지는 source 측 컨트랙트가, 자기가 신뢰하는 destination을 lock 시점에 사전 기록한다. 사용자는 source 측 컨트랙트를 신뢰하는 것으로 충분 — destination 자체를 직접 검증할 책임은 없다.**
 
 btips-2pc-design.md §9 #5a 책임 분담 재확인. 차이는 *destination 결정 주체*뿐 (dApp인지 사용자인지).
+
+---
+
+## 13. 양방향 이벤트 발행 통합 분석 + Fabric 제약 (2026-05-28)
+
+§11 `publish`, 기존 BTIP-25 `TransferEventElems`, BTIP-21 `LinkerResult` — 세 가지 cross-chain 이벤트 발행 경로가 본질적으로 같은 *증명 가능한 이벤트*인데 emit 방법이 분리돼 있는 것을 통합 가능한지 검토.
+
+### 13.1 현재 세 경로의 본질적 차이
+
+| 경로 | 누가 emit | 소스 식별자 | 검증 방식 |
+|---|---|---|---|
+| `TransferEventElems` (BPrN-origin) | ccApp이 직접 `stub.SetEvent` | `Header.chaincode_id` = ccApp | 수신측 *per-ccApp* 신뢰 설정 |
+| `LinkerResult` (BPuN 2PC 결과) | LinkerEndpoint가 emit | `contractAddress` = LinkerEndpoint | BTIP-37 LinkerRegistry로 canonical 검증 |
+| `publish` 신규 (BPuN-origin) | LinkerEndpoint가 emit | 동일 (canonical) | 동일 |
+
+→ BPuN 쪽 둘은 이미 canonical 모델. **비대칭은 BPrN 쪽 `TransferEventElems`만** — ccApp이 직접 emit하므로 source가 per-ccApp.
+
+### 13.2 통합 시도와 Fabric 제약
+
+수준 1 (포맷만 통일) vs 수준 2 (canonical source까지 통일)을 검토. 수준 2 시도 시 핵심 제약 발견:
+
+**Fabric Event Model**: 한 transaction의 최종 event는 **사용자가 호출한 최상위(top-level) chaincode의 `stub.SetEvent`** 만 transaction 응답에 실린다. `InvokeChaincode`로 호출된 nested chaincode의 SetEvent는 자기 stub에만 기록되고 transaction event로 propagate 되지 않는다.
+
+→ `ccApp → InvokeChaincode(LinkerEndpointCC.Publish) → SetEvent` 패턴 불가 (event 유실). 해결하려면 사용자가 LinkerEndpointCC를 직접 호출하고 LinkerEndpointCC가 ccApp을 invoke하는 *방향 역전*이 필요한데, 이는 ccApp을 passive로 만들고 사용자 진입점·ccApp 인터페이스를 전면 재설계해야 함.
+
+### 13.3 채택안 — PreparePublish가 payload만 반환, ccApp이 SetEvent
+
+사용자가 제안한 우회 방식:
+
+```go
+// LinkerEndpointCC: payload format 정의·생성만 담당, SetEvent는 안 함
+func (le *LinkerEndpointCC) PreparePublish(ctx, selector, actionData []byte) ([]byte, error) {
+    invokerCC := getInvokerChaincodeID(ctx)
+    payload := encodeLinkerPublishPayload(invokerCC, selector, actionData, ...)
+    return payload, nil
+}
+
+// ccApp: PreparePublish로 canonical payload 받고 자기가 SetEvent (top-level이라 살아남음)
+func (c *STC) PayTo(ctx, ...) error {
+    c.lockToEscrow(ctx, ...)
+    payload, _ := invokeChaincode(ctx, "LinkerEndpointCC", "PreparePublish", PAY_SELECTOR, ...)
+    return ctx.GetStub().SetEvent("LinkerPublish", payload)
+}
+```
+
+**얻는 것 vs 잃는 것**:
+- ✅ Fabric event 살아남음 (ccApp이 top-level emitter)
+- ✅ Payload format은 LinkerEndpointCC 단일 출처에서 canonicalize
+- ✅ ccApp UX 보존 (사용자가 ccApp에 직접 호출)
+- ✅ LinkerResult도 같은 LinkerPublish format의 한 selector로 흡수 가능 (BPuN 측)
+- △ `chaincode_id`는 여전히 ccApp별 → 수신측은 **per-ccApp 신뢰** 필요. ERC-20 standard practice와 동일 수준 → 수용 가능.
+
+### 13.4 아키텍처 결정사항
+
+- **(a) PreparePublish 형태**: chaincode 메소드 (Go library 아님). 형식 변경 시 한 곳에서 관리, state 기반 필드 추가 여지, audit trail 가능.
+- **(b) BTIP-25 (`TransferEventElems`)**: 신규 설계 제약 아님. 유지 방법이 있으면 유지, 없으면 deprecate.
+- **(c) ccApp의 "LinkerEndpointCC 경유 의무" 강제 수준**: **spec-level** (수준 1). cryptographic enforcement (수준 2)는 향후 BTIP-19 확장으로 추가 가능.
+- **(d) 미사용 ccApp**: deprecate 가능.
+
+### 13.5 BTIP-37 확장 — LINKER_CCS role (minimal)
+
+Spec-level enforcement를 위해 BTIP-37에 cooperative ccApp 등록 메커니즘 추가. 첫 시도(`registerCCApp`/`unregisterCCApp`/`isCCAppRegistered` + events + errors)는 *interface proliferation + 미정의 용어(`LinkerEndpointCC`, `ccApp`) 갑작스레 사용*으로 사용자 reject → rollback.
+
+**최종 minimal 접근** (적용 완료, btip-37.md L48-58 NOTE):
+- 새 메소드·이벤트·에러 0건 — 기존 `getContract`/`setContract` 그대로 재사용
+- LINKER_CCS는 **derived role**: `keccak256(abi.encodePacked("LinkerCCS", appAddr))` — 각 어플리케이션이 자기 주소 기반 고유 role
+- 한 chainId에 N>1 어플리케이션 등록 자연스럽게 지원 (각 derived role이 다름). 상대 체인이 명확한 운영주체의 프라이빗 네트워크라 N은 작음.
+- **BPuN의 LinkerRegistry에만 존재** — BPrN에는 대칭 `LINKER_DAPPS` 등록부 없음 (BPuN-origin은 LinkerEndpoint 한 곳에서만 emit되므로 BPrN 수신측은 그 단일 컴포넌트 진본성만 확인하면 충분)
+- 어휘 추상화: "LinkerEndpointCC", "ccApp" 같은 미정의 구체 용어 대신 "상대 체인의 비즈니스 어플리케이션"으로 표현
+
+### 13.6 사용자 피드백·교훈 (이번 세션)
+
+- **미정의 용어 갑자기 사용 금지** — BTIP 본문에 `LinkerEndpointCC`, `ccApp` 등 미정의 구체 용어를 갑자기 도입하면 안 됨. 추상 표현("신뢰 가능한 상대 체인 어플리케이션") 또는 사전 정의 후 사용.
+- **인터페이스 proliferation 회피** — 기존 primitive로 표현 가능하면 새 메소드 추가하지 말 것. 첫 BTIP-37 시도(3메소드+2이벤트+2에러)는 과도했음.
+- **호출 방향 ≠ 사용자 진입점** — Fabric event 모델 분석에서 `STCCC → LinkerEndpointCC.Publish` (nested) 패턴 시 LinkerEndpointCC의 SetEvent가 유실됨을 확인.
+
+---
+
+## 14. OPEN 항목 (2026-05-28 후)
+
+- (a) **`LinkerEndpointCC.PreparePublish` 정확한 스펙** — payload 인코딩 형식(필드 목록·순서·길이), audit state(향후 cryptographic enforcement 대비) 포함 여부. 어느 BTIP 문서에 둘지 (BTIP-29 확장 vs 새 BTIP).
+- (b) **`LinkerEndpoint.publish`(BPuN) 스펙** — actionSelector first-class vs packed, `LinkerPublish` 이벤트 topic 배치, return value, BTIP-21 확장 vs 새 BTIP.
+- (c) **`LinkerApp._lkPublish` 스펙** — base contract 정의(BTIP-26 확장 vs 새 BTIP), endpoint 주소 출처(생성자 vs BTIP-37 동적 조회), BPrN 대칭.
+- (d) **LinkerResult를 LinkerPublish로 흡수** — BPuN 측. 별도 selector. 기존 LinkerResult event 정의 제거 시점·하위호환성.
+- (e) **STC use case 측 미해결** — settle 시 STC 행선지(burn/payee 계정/응답 데이터), PaymentBridge ccApp 분리 vs STC 통합, approve의 BPrN/BPuN 동기화.
+- (f) **BTIP-26/34 Escrow Lifecycle 섹션에 IntendedHandler 결정 패턴 명문화**.
+- (g) **수준 2 cryptographic enforcement (향후)** — BTIP-19 확장으로 audit state proof 추가, RWset/state-proof 기반 LinkerEndpointCC 경유 검증.
+- (h) **BTIP-25 deprecation 계획** — LinkerPublish가 자리잡으면 단계적 폐기.
