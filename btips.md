@@ -189,7 +189,97 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 
 ## 세션별 완료 작업
 
+### 2026-06-01 (publish 폐기 결정 + BTIP-37 LINKER_CCS 제거 + BTIP-26 명문화)
+
+> 본 세션은 **설계 마감**을 우선한 정리 세션. `bpun-origin-payment-design.md`의 `LinkerEndpoint.publish` 제안을 폐기하고, 그 후속으로 BTIP-37 `LINKER_CCS` NOTE 제거 + BTIP-26에 수신 측 권한 모델·direct emit 모델 명문화. BPrN-origin 대칭(BTIP-34)은 다음 작업.
+
+#### ✅ `LinkerEndpoint.publish` 제안 폐기 (설계)
+
+`bpun-origin-payment-design.md` §15 신규 작성으로 폐기 결정 정리. 핵심 전제: **"ccApp(BPrN 수신 비즈니스 체인코드)은 신뢰 가능한 emitter dApp 목록을 관리하지 않는다."** 이 전제 하에서 publish가 보장하던 가치 4가지(단일 정규 contractAddress, `requestedBy = msg.sender` 비위조 캡처, 이벤트 스키마 표준화, caller chain 캡처)가 모두 `contractAddress`(evm 이벤트 index 0, EVM 강제 비위조) + 수신측 권한 3분기 모델로 대체됨 → publish 자체 불요.
+
+폐기 결정의 검증 케이스(설계 노트 §15.5 참조):
+- EOA payer: Alice가 BPrN에서 `stc.approve(dApp_BPuN_addr, amount)` 사전 인가 → BPuN dApp이 emit X → `contractAddress = dApp`, `allowance[Alice][dApp] >= amount` 통과 → 차감. 악의적 Mallory가 `emit X(payer=Alice, ...)` → `contractAddress=Mallory`, `allowance[Alice][Mallory]=0` → 거부.
+- dApp payer (자기 자금): `payer == requestedBy = contractAddress` → ETH 기본 룰로 즉시 통과.
+
+영향 받은 OPEN 항목: bpun-origin-payment-design.md §10의 (1)(2)(6)(7), §14의 (a)(b)(c)(d)(h) 해소. (3)(5)(8)(9)(e)(f)(g) 잔존.
+
+#### ✅ btip-37.md — LINKER_CCS role NOTE 제거
+
+`bpun-origin-payment-design.md` §15.6 항목 4 적용. publish 폐기로 "상대 체인 어플리케이션을 cooperative 발신 주체로 등록"하는 derived role 자체가 무의미. L48-58 NOTE 블록 한 개 삭제. 본문 인터페이스(`getContract`/`setContract`)·이벤트·에러·Appendix Go는 변경 없음 — LinkerRegistry의 본질(`(chainId, role)` 단일 키 모델)은 유지.
+
+#### ⚠️ btip-26.md / btip-34.md 명문화 시도 → 정정 (같은 세션, 2026-06-01)
+
+§15.6 초안의 항목 1·2(BTIP-26/34에 권한 3분기·`requestedBy` 매핑·"신뢰 발신자 목록 금지" 명문화)를 일단 진행했으나 사용자 redirect로 **두 블록 모두 삭제**. 정정 근거:
+- **BTIP-26/34는 일반 LinkerApp 인터페이스 스펙**. `payer`/`requestedBy`/`approve`/`allowance`는 *결제 이벤트의 도메인 용어*이므로 이벤트 정의 BTIP 없이 인터페이스 스펙에 박으면 다른 use case(NFT mint·거버넌스 투표 등)의 LinkerApp에 결제 도메인 가정을 강제하게 됨.
+- "신뢰 발신자 목록 관리 금지"는 *원래 없던 것을 부정형으로 명시*하는 잘못 — 화이트리스트는 논의 과정에 잠시 도입 검토됐다가 폐기된 것이고, 폐기 결과는 *문서에 없는 상태가 정상*.
+- `requestedBy`는 추상화. 이 매핑(`requestedBy = contractAddress` 또는 `chaincode_id`)이 의미를 가지려면 *결제 이벤트의 어떤 필드가 무엇인지* 정의된 BTIP가 선행되어야 함. 결제 이벤트 정의 BTIP 부재 상태에서 매핑만 박은 건 잘못된 작업 순서.
+
+**결과**:
+- BTIP-26: 추가했던 IMPORTANT NOTE "수신 측 권한 모델" + "요청 이벤트 발신 — direct emit" 절 *모두 삭제*. 본 세션 시작 전 상태로 복귀.
+- BTIP-34: 동일 두 블록 *모두 삭제*. 본 세션 시작 전 상태로 복귀.
+- `bpun-origin-payment-design.md` §15.6 정정: BTIP-26/34 변경 작업 *불요*로 결정. 권한 3분기 모델은 §15.4 use case 가이드에 한정 보존. 별도 BTIP로 명문화하려면 *결제 이벤트 정의 BTIP가 선행*되어야 함을 명시.
+- §15.9 다음 작업 우선순위에서 "BTIP-26/34 명문화" 항목 제거. 새 항목: 결제 이벤트 정의 BTIP(선결 조건) 또는 2PC 코드 구현.
+
+**교훈** (재발 방지):
+- BTIP 본문에 박을 내용은 *해당 BTIP의 책임 범위*에 속하는 것만. LinkerApp 인터페이스 스펙에 결제 도메인 권한 모델을 박으면 안 됨.
+- 부정형 의무(*~하지 말 것*)는 *원래 있던 것을 폐기한 경우*에만 강조 목적으로 사용. 처음부터 없던 것은 박지 않음.
+- 추상화 용어(`requestedBy` 등)는 *구체 정의를 가진 데이터 모델* 위에서만 도입. 데이터 모델 BTIP가 없으면 그 용어를 도입할 자리가 없음.
+
+#### ✅ btip-25.md / btip-40.md — LinkerTransfer 이벤트 표준 정의 (양 체인)
+
+publish 폐기 후속으로 결제 트리거 이벤트의 표준을 *이벤트 정의 BTIP*에 명문화. §15.6 정정에서 "결제 이벤트 정의 BTIP 선행"이라 했던 BTIP 한 쌍 신설.
+
+**결정 사항**:
+- **이벤트 이름**: 양 체인 동일 — `LinkerTransfer`. `Linker` prefix로 ERC-20 `Transfer`와 selector 분리.
+- **자료구조명**: BPrN은 `TransferLogElems`(EventLog.elems 스키마), BPuN은 `TransferLogAttrs`(Per-Event Tree attribute 시퀀스). 자료구조명에는 `Linker` prefix를 *두지 않음* — 사용자 결정: 이벤트 정의는 3rd party도 가능하므로 strict한 네이밍 규칙을 강요하지 않는다.
+- **Event Log 통합 어휘**: 링커가 다루는 이벤트는 발생 체인 무관하게 통칭 *Event Log*로 부른다. 각 체인의 직렬화 형식 차이는 자료구조명의 접미사(`...LogElems` / `...LogAttrs`)로 드러내고, 이벤트 이름과 필드 시퀀스는 공통. BTIP-25/40 본문에 짧은 NOTE로 명시.
+- **필드 시퀀스**: `from, to, amount, correlationId, memo` 양 체인 동일.
+- **필드명**: `payer/payee` 대신 `from/to`(더 노멀).
+- **correlationId**: 양 체인 모두 명시 박음 — BPrN-origin도 fire-and-forget 없이 항상 2PC 가정. 발신 (cc)App이 정한 매칭 식별자(예: 단조 증가 nonce). *이전 결정* `correlationId = tx_event_root`(btips-2pc-design §5)에서 *명시 id로 전환*. Nullifier 기준(=`tx_event_root`)과 correlationId(=매칭 식별자)가 분리됨 — 의미가 다르므로 분리되어도 무방.
+- **handler 필드 부재**: handler(targetDApp/executor)는 *증명 제출 시* 지정되므로 발신 이벤트에 박지 않음. 양 체인 동일.
+
+**파일 변경**:
+
+1. **btip-25.md (rename + 필드 갱신)**:
+   - 제목: `TransferEventElems on BPrN` → `LinkerTransfer Event on BPrN`
+   - 자료구조명: `TransferEventElems` → `TransferLogElems` (`Linker` prefix 없음)
+   - selector: `sha256("TransferEventElems(bytes,bytes,uint256,bytes)")` → `sha256("LinkerTransfer(bytes,bytes,uint256,bytes32,bytes)")`
+   - 필드 추가: `CorrelationId: bytes32` (gidx 7, elems index 3). 기존 `Memo`는 gidx 8(elems index 4)로 이동.
+   - 머클 트리: 8 leaf 완전 이진 트리 → 9 leaf + null 패딩 16 leaf 트리(BTIP-16 null 패딩 규칙).
+   - BTIP-40 cross-reference 추가.
+2. **btip-40.md (신규)**:
+   - `event LinkerTransfer(address indexed from, address indexed to, uint256 amount, bytes32 indexed correlationId, bytes memo)` Solidity 시그니처.
+   - 3 indexed(from, to, correlationId) + 2 non-indexed(amount, memo).
+   - BTIP-35 evm 이벤트 attribute 구조 위에 매핑: Per-Event Tree index 0~7(contractAddress/topic.0/topic.1/topic.2/topic.3/data/blockNumber/removed).
+   - `TransferLogAttrs` 자료구조명 도입(`Linker` prefix 없음).
+   - "Event Log" 통합 어휘 NOTE 본문 포함.
+   - BTIP-25와 대칭 표 명시(이벤트 이름·필드 시퀀스 동일, 자료구조명·selector 해시·발신 형식 차이는 각 체인 표현 형식의 본질).
+3. **BTIPS/README.md**:
+   - BTIP-25 행 제목 갱신.
+   - BTIP-40 신규 등재.
+
+**btips-2pc-design.md 영향** (별도 정정 필요 — 본 세션에서 추적만, 다음 세션에 정정):
+- §5 결정(correlationId = `tx_event_root`)이 본 결정으로 *명시 id 전환*. §5 본문 갱신 필요. Nullifier 기준(`tx_event_root`)과 correlationId의 의미 분리도 함께 기록.
+- §6 OnResult 분리·라우팅 의미는 영향 없음(여전히 발신 (cc)App으로 라우팅, correlationId가 매칭 키).
+
+#### 본 세션 최종 BTIP 변경 요약
+
+- ✅ **btip-37.md**: `LINKER_CCS` role NOTE 제거 (L48-58).
+- ✅ **btip-25.md**: rename(`TransferEventElems` → `LinkerTransferElems`) + 제목 변경 + `CorrelationId` 필드 추가 + 머클 트리 갱신.
+- ✅ **btip-40.md**: 신규 — `LinkerTransfer` Solidity event 표준 정의.
+- ✅ **BTIPS/README.md**: BTIP-25 제목 갱신 + BTIP-40 등재.
+- ❎ **btip-26.md**: 변경 *없음*(시도했던 두 블록 모두 삭제).
+- ❎ **btip-34.md**: 변경 *없음*(시도했던 두 블록 모두 삭제).
+
+#### 다음 작업
+
+- **결제 이벤트 정의 BTIP** 신설 여부 결정 (선결 — 권한 3분기를 BTIP에 박으려는 경우).
+- **STC use case 미해결** (`bpun-origin-payment-design.md` §10-8): settle 행선지, PaymentBridge 분리, approve 동기화.
+- **2PC 코드 구현** + BPuN→BPrN 이벤트 Prover(`u2r`). 권한 모델 BTIP 명문화와 독립.
+
 ### 2026-05-28 (BTIP-37 LINKER_CCS NOTE 추가 + Pay→publish 설계 논의)
+
+> **2026-06-01 갱신**: 본 세션의 BTIP-37 LINKER_CCS NOTE는 2026-06-01에 제거됨. Pay→publish 토론은 publish 폐기 결정으로 historical 기록. 아래 본문 보존.
 
 > 본 세션은 BTIP 문서 변경은 BTIP-37에 NOTE 한 블록 추가만 있고, 대부분은 *향후 설계*를 위한 토론. 전체 설계 토론은 `../task-contexts/bpun-origin-payment-design.md` §11~§14 참조 — 그쪽이 *자기완결적 설계 노트*다. 본 항목은 BTIP doc에 반영된 부분만 정리.
 
@@ -210,11 +300,17 @@ Roles 테이블 뒤(L48-58)에 NOTE 블록 한 개만 삽입. 본문 인터페�
 
 #### 진행 중 / 향후 BTIP 작업 (bpun-origin-payment-design.md §14 OPEN 참조)
 
-- `LinkerEndpoint.publish(...)` 스펙 (BPuN, BTIP-21 확장 또는 신규 BTIP)
-- `LinkerApp._lkPublish(...)` 스펙 (상속 base, BTIP-26 확장 또는 신규 BTIP)
-- `LinkerEndpointCC.PreparePublish(...)` 스펙 (BPrN, BTIP-29 확장 또는 신규 BTIP) — payload format 정의·반환만, SetEvent는 ccApp이 (Fabric 제약)
-- `LinkerResult` event를 `LinkerPublish` event의 한 selector로 흡수 검토 (BPuN)
-- BTIP-25 (`TransferEventElems`) deprecation 시점
+> **2026-06-01 갱신**: 아래 5개 항목 중 publish 관련 4개는 `bpun-origin-payment-design.md` §15(2026-06-01)에서 publish 폐기 결정으로 *해소*. ccApp emitter 무신뢰 전제 + `requestedBy = contractAddress` 규약으로 publish 가치 4가지가 모두 대체됨. 새 작업 항목은 §15.9 참조.
+
+- ~~`LinkerEndpoint.publish(...)` 스펙 (BPuN, BTIP-21 확장 또는 신규 BTIP)~~ — *해소.* publish 폐기.
+- ~~`LinkerApp._lkPublish(...)` 스펙 (상속 base, BTIP-26 확장 또는 신규 BTIP)~~ — *해소.*
+- ~~`LinkerEndpointCC.PreparePublish(...)` 스펙 (BPrN, BTIP-29 확장 또는 신규 BTIP)~~ — *해소.* ccApp이 종전대로 자기 `stub.SetEvent`로 emit.
+- ~~`LinkerResult` event를 `LinkerPublish` event의 한 selector로 흡수 검토 (BPuN)~~ — *해소.* LinkerPublish 부재이므로 LinkerResult 그대로 유지.
+- ~~BTIP-25 (`TransferEventElems`) deprecation 시점~~ — *불요.* BTIP-25 유지.
+
+**새 작업 항목 (2026-06-01 결정 반영)**:
+- BTIP-26/34에 Escrow Lifecycle Reference 절 신설/확장 — `requestedBy = contractAddress`(또는 BPrN-origin은 `Header.chaincode_id`) 규약, 권한 3분기(자기 자금 / `allowance` / EIP-712 서명), "신뢰 emitter 목록 관리 금지" 명문화.
+- BTIP-37 §13.5의 LINKER_CCS NOTE 재검토 또는 제거 — publish 가정에 묶여 있어 본 결정으로 무의미해질 가능성.
 
 ### 2026-05-28 (네이밍 정합) — commit: `docs: Normalize BTIP naming conventions`
 

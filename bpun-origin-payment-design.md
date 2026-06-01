@@ -1,14 +1,16 @@
 ---
-last_updated: 2026-05-28
-status: 설계 탐색 중 (미구현)
+last_updated: 2026-06-01
+status: 설계 결정 (publish 폐기, 미구현)
 related: ./btips.md, ./btips-2pc-design.md
 ---
 
 # BPuN-origin "이벤트 → BPrN 결제" 서비스 설계 연구
 
-> 2026-05-27 세션의 설계 논의·검토 대안·결정·발견한 함정을 자기완결적으로 정리. **아직 미구현(설계 탐색 단계)** 이며 다음 세션에서 이어가기 위한 노트. 인접 주제(2PC)의 확정 사항은 `./btips-2pc-design.md` §9 참조.
+> 2026-05-27 세션의 설계 논의·검토 대안·결정·발견한 함정을 자기완결적으로 정리. 인접 주제(2PC)의 확정 사항은 `./btips-2pc-design.md` §9 참조.
 >
-> **2026-05-28 업데이트**: §11(use-case independent reframing — `Pay` → `publish` 리네임, 두 층 분리, 파라미터 Model A 확정), §12(BPrN-origin STC use case 분석 — IntendedHandler 결정 패턴, timeout 불필요 검증, phishing 분석) 추가. §10은 부분 해결 표시 + 신규 OPEN 항목 추가. §7의 `Pay` 어휘는 `publish`로 대체됨.
+> **2026-05-28 업데이트**: §11(use-case independent reframing — `Pay` → `publish` 리네임, 두 층 분리, 파라미터 Model A 확정), §12(BPrN-origin STC use case 분석 — IntendedHandler 결정 패턴, timeout 불필요 검증, phishing 분석) 추가.
+>
+> **2026-06-01 결정**: `LinkerEndpoint.publish` 제안 **폐기**. 새 전제(ccApp이 신뢰 emitter 목록을 관리하지 않음)와 결합하면 publish의 가치 4가지(단일 정규 contractAddress, `requestedBy` 비위조 캡처, 이벤트 스키마 표준화, caller chain 캡처)가 모두 `contractAddress`(evm 이벤트 index 0, EVM 강제 비위조) + ccApp 권한 모델로 대체됨. 정리는 §13 참조. §6 OnOpcode·§7 `Pay`·§11 `publish` 제안은 historical로 보존하되 *폐기됨* 표시. §10 OPEN 항목 다수 해소.
 
 ---
 
@@ -53,7 +55,9 @@ related: ./btips.md, ./btips-2pc-design.md
 - **contractAddress(emitter, evm 이벤트 index 0)**: **컨트랙트 payer만** 커버. EOA payer면 contractAddress = (EOA가 호출한) 컨트랙트이지 EOA가 아님 → 엉뚱한 계정 차감. ✗ (EOA 단독 불가)
 - 표준 evm 이벤트엔 **"msg.sender(EOA든 컨트랙트든 = 호출자)"를 담는 비위조 필드가 없음.** → 노드가 노출하거나(§6), 정규 Pay로 Solidity에서 캡처(§7) 해야 함.
 
-## 6. 노드 레벨 msg.sender 캡처 (OnOpcode) — **PARKED, 다음에 재검토**
+## 6. 노드 레벨 msg.sender 캡처 (OnOpcode) — **폐기 (2026-06-01)**
+
+> 본 절은 historical 탐색 기록. 2026-06-01 결정으로 ccApp이 emitter 신뢰 목록을 관리하지 않고 `requestedBy = contractAddress`(evm index 0, EVM 강제 비위조)로 통일하기로 합의 → `msg.sender`를 별도 캡처할 필요가 없어 본 접근은 영구 불요. 아래 분석은 OnOpcode 자체의 기술적 메모로 남김.
 
 - `evmLogsToEvent`는 msg.sender를 모름(`types.Log`에 caller 없음, `Address`=emitter만).
 - 실행 중 **LOG opcode 시점**에서만 알 수 있음: `scope.Caller()`=msg.sender, `scope.Address()`=emitter.
@@ -62,9 +66,11 @@ related: ./btips.md, ./btips-2pc-design.md
 - **필수 조건**: 디버그 tracer가 아니라 **항상 켜진 결정론적 캡처**(tx_event_root→합의 포함).
 - 사용자 코멘트: "OnOpcode 방법 괜찮은 것 같다, 나중에 다시 검토하자." → **재검토 대기.**
 
-## 7. 정규 `LinkerEndpoint.Pay` 제안 (노드 변경 없이 contract-payer 해결) — 유력
+## 7. 정규 `LinkerEndpoint.Pay` 제안 (노드 변경 없이 contract-payer 해결) — **폐기 (2026-06-01)**
 
 > **2026-05-28 업데이트**: `Pay`는 결제 편향이라 use-case independent한 `publish`로 변경. 메소드 시그니처·이벤트 구조·두 층 분리(`LinkerApp._lkPublish` 추가)는 §11 참조. 본 절은 *historical 탐색* 기록으로 유지.
+>
+> **2026-06-01 결정**: §11의 `publish` 후속 제안 전체와 함께 폐기. 폐기 근거는 §13 참조 — `requestedBy = contractAddress`(evm index 0, EVM 강제 비위조)로 통일하면 별도 정규 메소드 없이도 동일 보장이 성립.
 
 dApp이 X를 직접 emit하지 않고 **`LinkerEndpoint.Pay(payer, payee, amount, …)`** 를 호출. Pay가 이벤트를 emit:
 - `contractAddress == LinkerEndpoint`(정규, 레지스트리 조회), `topic.0 == X sig`, `topic.1 == dApp(=Pay의 msg.sender)`, `topic.2 == payer`, `topic.3 == payee`, `data == amount`.
@@ -85,30 +91,36 @@ dApp이 X를 직접 emit하지 않고 **`LinkerEndpoint.Pay(payer, payee, amount
 
 ## 9. 현재까지의 결론
 
+> **2026-06-01 갱신**: 결론 (iii)·(iv) 추가. 이전 (i)·(ii)는 §13의 결정으로 모두 폐기됨.
+
 - 정방향 전달은 **기존 프로토콜로 충분**(전달용 새 프리미티브 불요).
-- 화이트리스트 없이 payer 인가 → **allowance/permit 모델**(requestedBy=msg.sender 기록 + BPrN에서 self/allowance/EIP-712 인가). **tx.origin 금지.**
-- 정규 이벤트 + 비위조 requestedBy 확보 방법 2가지: **(i) 정규 `LinkerEndpoint.Pay`**(Solidity msg.sender, 노드 변경 없음) — 현시점 유력 / (ii) 노드 msg.sender 캡처(OnOpcode) — PARKED.
+- 화이트리스트 없이 payer 인가 → **allowance/permit 모델**(BPrN에서 self/allowance/EIP-712 인가). **tx.origin 금지.**
+- ~~정규 이벤트 + 비위조 requestedBy 확보 방법 2가지: **(i) 정규 `LinkerEndpoint.Pay`**(Solidity msg.sender, 노드 변경 없음) — 현시점 유력 / (ii) 노드 msg.sender 캡처(OnOpcode) — PARKED.~~ **→ 둘 다 폐기.**
+- **(iii) `requestedBy = contractAddress`(evm 이벤트 index 0)**: dApp이 자기 코드에서 emit하면 EVM이 자동으로 박는 비위조 값. publish 같은 별도 메소드 없이 *그 자체로* 위조 불가 비위조 requestedBy 확보. §13 §3.
+- **(iv) ccApp의 emitter 무신뢰**: BPrN ccApp은 BPuN dApp 주소를 *허용/거부 식별*에 쓰지 않음. 신뢰 앵커는 *오직* payer 측 인가(`payer == requestedBy` 자기 자금 / `allowance[payer][requestedBy]` / EIP-712 서명). §13 §2.
+- 자금 소유자가 dApp이면 `payer == requestedBy` 분기로 즉시 통과(ETH 기본 룰 미러). 자금 소유자가 EOA면 allowance 또는 permit 분기. §13 §4.
 
 ## 10. 미해결/다음 세션 할 일 (OPEN)
 
 > 2026-05-28 업데이트: 항목 2/4·일부는 §11/§12에서 부분 해결. 신규 항목 6~9 추가.
+>
+> **2026-06-01 갱신**: §13의 publish 폐기 결정으로 1·2·6·7이 해소(메소드 없으므로 스펙 작성 불요). 3·5·8·9는 잔존. 9는 BTIP 명문화 사항이 더 명확해져 §13 §6로 통합.
 
-1. **OnOpcode 기반 msg.sender 캡처 재검토**(§6, parked) — `publish` 방식으로 충분한지 vs 노드 노출이 필요한 케이스가 있는지. *변경 없음, 여전히 parked.*
-2. ~~**정규 `LinkerEndpoint.Pay` 스펙 확정**~~: §11에서 `publish`로 리네임 + Model A 파라미터 확정. **남는 세부**(아래 7): `actionSelector` first-class 여부, `LinkerPublish` 이벤트 topic 배치, return value, 새 BTIP로 둘지 btip-21 확장.
-3. **크로스체인 신원/주소 통일**: payer(BPrN 자금 계정)·requestedBy(dApp 주소)가 같은 주소 네임스페이스여야 `allowance[payer][requestedBy]`가 양쪽에서 의미. *부분 해결* — `block.chainid` + `msg.sender` + BTIP-9 derived 20B address 통일 방향(§11.3). `approve` 동기화는 미정.
+1. ~~**OnOpcode 기반 msg.sender 캡처 재검토**~~ — *해소.* `requestedBy = contractAddress` 통일로 노드 캡처 불요(§13 §3).
+2. ~~**정규 `LinkerEndpoint.Pay` 스펙 확정**~~ — *해소.* publish 자체 폐기.
+3. **크로스체인 신원/주소 통일**: payer(BPrN 자금 계정)·requestedBy(dApp 주소)가 같은 주소 네임스페이스여야 `allowance[payer][requestedBy]`가 양쪽에서 의미. *부분 해결* — BTIP-9 derived 20B address 통일 방향. `approve` 동기화는 미정. **잔존.**
 4. ~~**payer 의미 확정**~~: §12에서 use case별 결정 — dApp-orchestrated는 dApp-configured, user-driven payment는 user-input. **사용자 입력 phishing은 protocol 외부**(§12.6).
-5. **Nullifier로 재생 방지 → 이중 차감 방지**: existing BTIP-24/33 패턴(`(eventRoot, dApp)` per-pair) 그대로. 별도 작업 불요.
-
-**신규 OPEN** (§11/§12에서 파생):
-
-6. **LinkerApp base 컨트랙트 스펙** (§11.2 후속): BTIP-26 범위 확장 vs 신규 BTIP, 상속 optional, endpoint 주소 출처(생성자 vs BTIP-37 동적 조회), BPrN 대칭(BTIP-34), payload 인코딩 규약.
-7. **`publish` 함수 세부** (§11.3 후속): `actionSelector` first-class vs `actionData`에 packed, `LinkerPublish` 이벤트 topic 배치, return value 형식(`bytes32 messageId` 등).
-8. **STC use case 측 미해결** (§12 후속, 사용자가 "지금 논의하지 말고"한 항목): (a) settle 시 STC 행선지(burn / payee 계정 / 응답 데이터 중 어느 것), (b) PaymentBridge ccApp 분리 vs STC 통합 결정, (c) `approve`의 BPrN/BPuN 동기화 모델.
-9. **BTIP-26/34 Escrow Lifecycle 섹션에 IntendedHandler 결정 패턴 권장 명문화**: dApp-orchestrated → dApp-configured, user-driven payment → user-input + payee_account 함께 입력 등 가이드.
+5. **Nullifier로 재생 방지 → 이중 차감 방지**: existing BTIP-24/33 패턴(`(eventRoot, dApp)` per-pair) 그대로. 별도 작업 불요. **잔존(상태 변경 없음).**
+6. ~~**LinkerApp base 컨트랙트 스펙**~~ — *해소.* publish 폐기로 base 헬퍼 무의미.
+7. ~~**`publish` 함수 세부**~~ — *해소.* publish 자체 폐기.
+8. **STC use case 측 미해결** (§12 후속): (a) settle 시 STC 행선지(burn / payee 계정 / 응답 데이터 중 어느 것), (b) PaymentBridge ccApp 분리 vs STC 통합 결정, (c) `approve`의 BPrN/BPuN 동기화 모델. **잔존.**
+9. ~~**BTIP-26/34 Escrow Lifecycle 섹션에 IntendedHandler 결정 패턴 권장 명문화**~~ — §13 §6에 BTIP 명문화 사항으로 통합 (publish 무관하게 적용).
 
 ---
 
-## 11. (2026-05-28) `Pay` → `publish` 리네임 + 파라미터 확정
+## 11. (2026-05-28) `Pay` → `publish` 리네임 + 파라미터 확정 — **폐기 (2026-06-01)**
+
+> **2026-06-01 결정**: 본 절 전체(메소드 이름 `publish` 채택, 두 층 분리 `LinkerEndpoint.publish` + `LinkerApp._lkPublish`, Model A 파라미터) 폐기. 폐기 근거는 §13 참조. 본문은 *historical 탐색* 기록으로 유지.
 
 본 문서가 "결제(payment)" 어휘에 과도하게 묶여 일반화 필요성 제기. §7의 `LinkerEndpoint.Pay`는 결제만이 아니라 NFT mint, 거버넌스 투표, 데이터 업데이트 등 **임의 cross-chain 액션 트리거**의 도구로 정의되어야 함. 이름·인터페이스를 use-case independent로 재정의.
 
@@ -252,7 +264,9 @@ btips-2pc-design.md §9 #5a 책임 분담 재확인. 차이는 *destination 결�
 
 ---
 
-## 13. 양방향 이벤트 발행 통합 분석 + Fabric 제약 (2026-05-28)
+## 13. 양방향 이벤트 발행 통합 분석 + Fabric 제약 (2026-05-28) — **부분 폐기 (2026-06-01)**
+
+> **2026-06-01 갱신**: 본 절의 §11 `publish` 전제 부분(통합 채택안 §13.3 `PreparePublish`, BTIP-37 LINKER_CCS role §13.5 NOTE)은 publish 폐기와 함께 무의미. 다만 §13.2의 Fabric Event Model 제약(nested SetEvent 유실)·§13.6의 사용자 피드백(미정의 용어 금지·인터페이스 proliferation 회피)은 *향후 모든 BPrN ccApp 설계에 그대로 적용되는 기술적 사실*이라 보존. 결과적으로 BPrN-origin도 *ccApp이 자기 stub.SetEvent로 emit* — publish 폐기와 자연 일치.
 
 §11 `publish`, 기존 BTIP-25 `TransferEventElems`, BTIP-21 `LinkerResult` — 세 가지 cross-chain 이벤트 발행 경로가 본질적으로 같은 *증명 가능한 이벤트*인데 emit 방법이 분리돼 있는 것을 통합 가능한지 검토.
 
@@ -329,11 +343,115 @@ Spec-level enforcement를 위해 BTIP-37에 cooperative ccApp 등록 메커니�
 
 ## 14. OPEN 항목 (2026-05-28 후)
 
-- (a) **`LinkerEndpointCC.PreparePublish` 정확한 스펙** — payload 인코딩 형식(필드 목록·순서·길이), audit state(향후 cryptographic enforcement 대비) 포함 여부. 어느 BTIP 문서에 둘지 (BTIP-29 확장 vs 새 BTIP).
-- (b) **`LinkerEndpoint.publish`(BPuN) 스펙** — actionSelector first-class vs packed, `LinkerPublish` 이벤트 topic 배치, return value, BTIP-21 확장 vs 새 BTIP.
-- (c) **`LinkerApp._lkPublish` 스펙** — base contract 정의(BTIP-26 확장 vs 새 BTIP), endpoint 주소 출처(생성자 vs BTIP-37 동적 조회), BPrN 대칭.
-- (d) **LinkerResult를 LinkerPublish로 흡수** — BPuN 측. 별도 selector. 기존 LinkerResult event 정의 제거 시점·하위호환성.
-- (e) **STC use case 측 미해결** — settle 시 STC 행선지(burn/payee 계정/응답 데이터), PaymentBridge ccApp 분리 vs STC 통합, approve의 BPrN/BPuN 동기화.
-- (f) **BTIP-26/34 Escrow Lifecycle 섹션에 IntendedHandler 결정 패턴 명문화**.
-- (g) **수준 2 cryptographic enforcement (향후)** — BTIP-19 확장으로 audit state proof 추가, RWset/state-proof 기반 LinkerEndpointCC 경유 검증.
-- (h) **BTIP-25 deprecation 계획** — LinkerPublish가 자리잡으면 단계적 폐기.
+> **2026-06-01 갱신**: (a)·(b)·(c)·(d)·(h)는 publish 폐기로 해소. (e)·(f)·(g)는 잔존.
+
+- ~~(a) **`LinkerEndpointCC.PreparePublish` 정확한 스펙**~~ — *해소.* publish 폐기로 메소드 자체 불요.
+- ~~(b) **`LinkerEndpoint.publish`(BPuN) 스펙**~~ — *해소.* publish 자체 폐기.
+- ~~(c) **`LinkerApp._lkPublish` 스펙**~~ — *해소.* base 헬퍼 무의미.
+- ~~(d) **LinkerResult를 LinkerPublish로 흡수**~~ — *해소.* LinkerPublish 부재.
+- (e) **STC use case 측 미해결** — settle 시 STC 행선지(burn/payee 계정/응답 데이터), PaymentBridge ccApp 분리 vs STC 통합, approve의 BPrN/BPuN 동기화. **잔존.**
+- (f) **BTIP-26/34 Escrow Lifecycle 섹션에 IntendedHandler 결정 패턴 명문화** — §15 §6 BTIP 명문화 사항에 통합. **잔존(작성 대기).**
+- (g) **수준 2 cryptographic enforcement (향후)** — BTIP-19 확장으로 audit state proof 추가, RWset/state-proof 기반 LinkerEndpointCC 경유 검증. *publish 무관, 별도 미해결.* **잔존.**
+- ~~(h) **BTIP-25 deprecation 계획**~~ — *불요.* LinkerPublish가 자리잡지 않으므로 BTIP-25는 그대로 운용. (단, BPrN-origin 이벤트 발행을 BTIP-25에 한정할지/더 일반화할지는 별도 검토 가능.)
+
+---
+
+## 15. (2026-06-01) `publish` 폐기 결정 + ccApp emitter 무신뢰 모델 확정
+
+> 2026-05-27/28의 publish 탐색을 종결하는 결정. 본 절은 *결론*이며, 위쪽 §§7·11·13·14의 publish 관련 본문은 historical로 보존됨. 향후 작업은 본 절을 기준으로 시작.
+
+### 15.1 결정 요지
+
+- **`LinkerEndpoint.publish`(BPuN)·`LinkerApp._lkPublish`(상속 base)·`LinkerEndpointCC.PreparePublish`(BPrN) 전부 폐기.**
+- BPuN-origin 이벤트는 **dApp이 자기 코드에서 직접 emit**. 별도 정규 메소드 없음.
+- BPrN-origin도 종전 그대로 ccApp이 `stub.SetEvent`로 직접 emit (BTIP-25 `TransferEventElems` 패턴 유지).
+- 양방향 대칭: 양쪽 모두 *사용자 호출 컨트랙트가 직접 emit*, 별도 endpoint 경유 없음.
+
+### 15.2 결정의 결정적 전제
+
+**"ccApp(BPrN 수신측 비즈니스 체인코드)은 신뢰 가능한 emitter dApp 목록을 관리하지 않는다."**
+
+이 전제 하에서 publish가 보장하던 가치 4가지가 모두 dead weight가 된다:
+
+| publish의 가치 | 대체 메커니즘 |
+|---|---|
+| 단일 정규 contractAddress (`= LinkerEndpoint`) | ccApp이 contractAddress로 emitter 필터링하지 않음 → 가치 없음 |
+| `requestedBy = msg.sender` 비위조 캡처 | `contractAddress`(evm 이벤트 index 0) 자체가 EVM 강제 비위조 → 동일 보장 |
+| 이벤트 스키마 표준화 | BTIP가 X 이벤트 시그니처만 정의하면 충분 (`topic.0 = keccak256(...)`) |
+| caller chain 캡처 | STC use case의 권한은 caller chain이 아니라 *payer의 approve 행위*에서 나옴 |
+
+### 15.3 `requestedBy = contractAddress` 규약 (프로토콜 의무)
+
+BPuN dApp이 emit한 이벤트의 `contractAddress`(evm 이벤트 index 0)는 EVM이 자동으로 `address(this)`로 박는다. *위조 불가*. BPrN ccApp은 이 필드를 `requestedBy`로 해석한다.
+
+- dApp이 attribute에 박은 임의 필드(예: `requestedBy=Alice`)는 ccApp이 *requestedBy로 해석하지 않는다*. 위조 가능.
+- 이 규약은 BTIP-26/34에 명문화 (§15.6).
+
+### 15.4 ccApp의 권한 모델 (3분기, ERC-20 미러)
+
+`requestedBy = contractAddress` 통일 후, ccApp이 `payer` 인가를 판단하는 3개 분기:
+
+| 분기 | 조건 | 미러 |
+|---|---|---|
+| 1. 자기 자금 | `payer == requestedBy` | ETH 기본 룰 (transferFrom 없음) |
+| 2. 위임 자금 | `allowance[payer][requestedBy] >= amount` | ERC-20 `transferFrom` |
+| 3. 서명 인가 | payer의 EIP-712 서명 (`payee, amount, nonce, deadline` 바인딩) | ERC-20 `permit` |
+
+**셋 중 하나도 통과 못 하면 거부.** 세 분기 모두 `requestedBy`의 진실성(`contractAddress`로 EVM 강제) 위에서 작동.
+
+### 15.5 자금 소유자별 동작
+
+**EOA payer (Alice)**:
+- BPuN dApp의 `payOrder()` 호출 → dApp이 `emit X(payer=Alice, payee, amount)`.
+- `contractAddress = dApp`. `payer != requestedBy` → 분기 1 불가.
+- Alice가 사전에 BPrN에서 `stc.approve(dApp_address, amount)` 호출했어야 분기 2 통과. 또는 분기 3 서명.
+- 악의적 Mallory가 `emit X(payer=Alice, ...)` 임의 emit 시: `contractAddress=Mallory`, `allowance[Alice][Mallory]=0` → 거부. *도난 불가.*
+
+**dApp payer (Bob_DApp이 자기 BPrN 잔액 사용)**:
+- Bob_DApp이 자기 코드에서 `emit X(payer=Bob_DApp, payee, amount)`.
+- `contractAddress = Bob_DApp = payer` → 분기 1 즉시 통과. allowance·서명 불요.
+- 악의적 Mallory가 `emit X(payer=Bob_DApp, ...)` emit 시: `contractAddress=Mallory ≠ Bob_DApp=payer` → 분기 1 불가, `allowance[Bob_DApp][Mallory]=0` → 거부.
+
+**주소 통일 전제**: payer·requestedBy가 양 체인에서 동일 주소 네임스페이스를 가지려면 BTIP-9 derived 20B address로 통일돼야 함(§10-3 잔존 항목).
+
+### 15.6 BTIP 명문화 사항 (다음 작업)
+
+> **2026-06-01 정정**: 초안의 항목 1·2(BTIP-26/34에 권한 3분기·`requestedBy` 매핑·"신뢰 emitter 목록 관리 금지" 명문화)는 잘못된 방향이었음 — BTIP-26/34는 *일반 LinkerApp 인터페이스 스펙*이고, `payer`/`requestedBy`/`approve`/`allowance`는 *결제 이벤트의 도메인 용어*이므로 이벤트 정의 BTIP 없이 인터페이스 스펙에 박으면 다른 use case(NFT mint·거버넌스 투표 등)의 LinkerApp에 결제 도메인 가정을 강제하게 됨. "신뢰 emitter 목록 관리 금지"는 원래 없던 것을 부정형으로 박는 것이라 무의미. 권한 3분기 모델은 §15.4 *use case 가이드*에 한정하고, 별도 BTIP로 명문화하려면 **결제 이벤트 정의 BTIP가 선행**되어야 함(현재 부재).
+
+본 결정으로 BTIP 문서에 *실제 반영해야* 할 항목:
+
+1. **BTIP-37**: §13.5의 LINKER_CCS role NOTE 제거. publish 가정에 묶여 있어 본 결정으로 무의미. **(완료 2026-06-01)**
+2. **BTIP-21·BTIP-29**: publish 관련 메소드/이벤트 추가 *없음*. 기존 onProof/OnProof로 충분. **(작업 자체 불요)**
+3. **BTIP-25**: 그대로 유지. BPrN-origin 이벤트는 `TransferEventElems`로 계속 발행.
+4. **BTIP-26·BTIP-34**: 변경 *없음*. 일반 LinkerApp 인터페이스 스펙이므로 결제 도메인 권한 모델을 박지 않는다.
+
+**§15.4 권한 3분기(자기 자금 / allowance / permit)와 `requestedBy = contractAddress` 매핑은**:
+- 본 문서(§15.4)에 *애플리케이션 패턴 노트*로 보관됨.
+- BTIP로 명문화하려면 **결제 이벤트 정의 BTIP를 먼저** 만들어야 함. 그 BTIP에서:
+  - 결제 이벤트 필드(`payer`/`payee`/`amount` 등)를 정의.
+  - 어떤 필드가 `requestedBy`로 매핑되는지(BPuN-origin은 `contractAddress`, BPrN-origin은 `Header.chaincode_id`) 정의.
+  - 그 이벤트의 *수신 시* 권한 3분기를 명시.
+- 결제 이벤트 정의 BTIP가 부재한 현 상태에서는 BTIP 본문에 박을 자리가 없으므로, 권한 모델은 본 use case 가이드에만 보존.
+
+### 15.7 양방향 대칭 정리
+
+| 방향 | emitter | source 식별 | ccApp/dApp 권한 |
+|---|---|---|---|
+| BPrN-origin | ccApp `stub.SetEvent` | `Header.chaincode_id` | BPuN dApp 측 권한 모델 (대칭 분기) |
+| BPuN-origin | dApp `emit X(...)` | `contractAddress`(evm index 0) | BPrN ccApp 측 권한 모델 (15.4 3분기) |
+
+publish 폐기로 양방향이 *완전 대칭* — endpoint 경유 없이 origin 측 컨트랙트가 직접 emit, 수신 측 컨트랙트가 권한 결정.
+
+### 15.8 잃는 것 / 잔존 위험
+
+- BPrN/BPuN 주소 네임스페이스 통일이 약하면 `allowance[payer][requestedBy]` 매핑이 깨짐 → §10-3 항목으로 잔존.
+- dApp이 payer 필드를 *정직하게 박는다*는 신뢰는 dApp 코드 정확성 수준에서만 보장 (위조해도 권한 3분기로 차단되므로 도난은 없음 — *정직성 위반의 결과는 dApp 자기 자신의 트랜잭션 거부*).
+- 1:1 high-trust 시나리오에서 "LinkerEndpoint emit만 받음" 정책으로 noise 차단하던 옵션 상실. 다만 ccApp이 신뢰 emitter 목록을 관리 안 하는 전제와 이미 양립 불가능했으므로 잃을 게 없음.
+
+### 15.9 다음 작업 우선순위 (이번 결정 후)
+
+> **2026-06-01 정정**: §15.6 정정으로 BTIP-26/34 명문화 작업은 *불요*로 결정. BTIP-37 LINKER_CCS 제거는 완료.
+
+1. **결제 이벤트 정의 BTIP** (선결 — 권한 모델을 BTIP 차원에서 명문화하려는 경우): 결제 이벤트의 필드(`payer`/`payee`/`amount`/correlationId 등)를 정의하는 새 BTIP가 있어야 §15.4의 권한 3분기·`requestedBy` 매핑을 그 BTIP 안에 박을 수 있음. 현재는 use case 가이드(§15.4)로 보관.
+2. **STC use case 미해결 항목** (§10-8 잔존). settle 행선지, PaymentBridge 분리, approve 동기화. 위 항목 1을 진행한다면 함께 정의.
+3. **2PC 코드 구현** — on-bpun/on-bprn 양쪽에 LinkerResult/onResult/handleLinkerResult/try-catch/nonReentrant 추가, BPuN→BPrN 이벤트 Prover(u2r) 구현. 권한 모델 BTIP 명문화와 독립적으로 진행 가능.

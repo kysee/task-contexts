@@ -1,6 +1,6 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-05-26 — BTIP-37/39 구현, secp256k1 교정, 레지스트리 기반 리팩토링, tmproto/tendermint 라이브러리 정합, BTIP-39 Prover 작성
+> 마지막 업데이트: 2026-06-01 — `audit-report-2026-05-28.md` 결과를 기준으로 실제 리포 상태(HEAD `31466e0`)와 재동기화. on-bprn 2026-05-26 구현 세션 산출물은 커밋 `f414756`/`31466e0`로 실제 반영됐음을 확정. 이전 "구현 세션" 항목들의 정합 상태는 §"2026-06-01 — 재동기화" 참조.
 
 ---
 
@@ -241,12 +241,16 @@ if (sibBuf.equals(ZERO32)) {
 
 ---
 
-## 미완료
+## 미완료 (2026-06-01 재정리)
 
-- `Counter.sol` 샘플 파일 삭제 (hardhat init 생성물)
-- BTIP22 LinkerPolicy 스펙 확정 후 정식 구현
-- Prover: 각 endorser 피어에게 **개별 블록 조회**하여 peer별 block commit sig 수집 (현재는 단일 블록 조회 → 하나의 sig만 수집)
-- Verifier 계약: 샌드박스 환경 제약으로 `npx hardhat compile` 검증 미완 (로컬에서 `npx hardhat clean && npx hardhat compile` 재확인 필요)
+> 자세한 현황과 새로 발견된 갭은 §"2026-06-01 — 재동기화" 참조.
+
+- **BPuN→BPrN 이벤트 Prover 미구현** (end-to-end의 결정적 미싱 피스). `prover-ts/src/prover/u2r/` 디렉토리 자체 부재 — 감사 시점의 placeholder도 사라짐.
+- **2PC 미구현** — 설계는 `btips`/`btips-2pc-design`에 완결돼 있으나 코드 미착수. 누락 항목: on-bpun(`IBTIP21.onResult`, `LinkerResult` 이벤트, `handleLinkerResult`, `try/catch`, `nonReentrant`, `MIN_CALLBACK_GAS`, `cancelLinkerEvent` IBTIP26 갱신), on-bprn(`OnResult`, `HandleLinkerResult`, `LinkerResultElems`).
+- **Prover multi-peer block-commit-sig 수집** — 여전히 단일 블록 조회(피어 1개 sig). BTIP-17 검증 강도를 끌어올리려면 각 endorser 피어에게 개별 블록 조회 필요.
+- **on-bpun 정책 엔진 문서화** — `LinkerPolicyVerifier.sol` 외 6개 파일(아래 §"2026-06-01 — 재동기화" 1.B)이 코드에 존재하나 본 컨텍스트 문서엔 기재 부족. BTIP-22 구현 형태(`signatureRuleTree`, `implicitMetaPolicy`, Fabric channel config 기반)로 확장됐음을 인터페이스/스펙 차원에서 정리 필요.
+- **`linker-v2` 리포 컴파일 검증** — 샌드박스에서 Go(`go build`)·Hardhat·Foundry 모두 미수행. 로컬에서 `cd verifier/on-bprn && go mod vendor && go build ./...` 및 `cd verifier/on-bpun && npx hardhat compile`(또는 `forge build`) 확인 필요.
+- `Counter.sol` 샘플 파일 삭제 (hardhat init 생성물) — 미확인.
 
 ---
 
@@ -695,4 +699,111 @@ BPuN RPC(Tendermint, 26657)로 블록 1~latest 스캔 → Validator Set 변경 �
 - 커스텀 ValidatorSet/Validator 제거 → 크립토 = tmproto, 경계 = hex DTO
 - **해시뿐 아니라 인코딩/디코딩도 tendermint/gogo 라이브러리 직접 호출** (DecodeAminoBytes=gogo BytesValue, tx_result=abci.ResponseDeliverTx, ValidatorsHash=tmtypes.Hash(), RFC6962=crypto/merkle)
 - BTIP-32 외부 = hex string, `total_power`는 optional 태그
+
+---
+
+## 2026-06-01 — 재동기화 (audit-report-2026-05-28.md 후속)
+
+> `audit-report-2026-05-28.md`는 HEAD `678d245` 기준이었음. 그 뒤 두 커밋(`f414756 feat: Add LinkerRegistry and update chaincodes`, `31466e0 refactor: Use tendermint original logic and data types`)이 푸시되어 감사 보고서가 지적한 on-bprn 갭 대부분이 해소됐고, 동시에 새로 발견·반영된 항목이 있어 본 문서를 코드 사실에 맞춰 정렬한다. 본 절은 *현재 코드(`feat/kyle`@`31466e0`)와 위쪽 본문의 정합 상태*를 절대 기준으로 정리.
+
+### 1. 컴포넌트별 실제 상태 (코드 기준)
+
+#### 1.A on-bprn (`verifier/on-bprn/`) — 감사 시점 ❌ → 현재 ✅
+
+감사 리포트가 "어느 브랜치에도 존재하지 않음"으로 기록한 산출물이 `f414756`/`31466e0`에 실재함을 직접 확인. 위 §"2026-05-26 (구현 세션)" 항목들의 *코드 반영 여부*는 다음과 같다.
+
+| 항목 | 파일 | 상태 |
+|------|------|------|
+| `types/registry.go` (`RegistryIDKey`, `SetRegistryID`/`GetRegistryID`, `ResolveContract`) | `types/registry.go` | ✅ 실재 |
+| `types/ibtip37.go` (Role* 상수 + `IBTIP37`) | `types/ibtip37.go` | ✅ 실재 |
+| `linker-registry/` 체인코드 (`GetContract`/`SetContract`, `ContractRegistered` 이벤트) | `linker-registry/main.go` | ✅ 실재 |
+| `types/tmverify.go` (`VerifyCommitSignatures`/`VerifyRFC6962`/`ComputeValidatorsHash`/`DecodeAminoBytes`) | `types/tmverify.go` | ✅ 실재 |
+| `types/validatorset_dto.go` (`ValidatorSetDTO`/`ValidatorDTO`/`ToProto`/`Entries`/`HexToBytes`) | `types/validatorset_dto.go` | ✅ 실재 |
+| 커스텀 `ValidatorSet`/`Validator` 제거 → tmproto + hex DTO | `types/types.go` | ✅ (도메인 타입 없음, 주석으로 명시) |
+| BTIP-39 5단계 `UpdateValidatorSet` 구현 (panic 제거) | `linker-policy/main.go:223+` | ✅ 실재 (idempotent 멱등 처리 포함) |
+| linker-verifier secp256k1 교정(ed25519 제거) → `tmverify.VerifyCommitSignatures` 위임 | `linker-verifier/main.go` | ✅ (ed25519 import 0) |
+| 개별 setter 제거 → `SetRegistryID` + `ResolveContract` | `linker-endpoint`, `linker-verifier`, `linker-nullifier`, `dapp-example` 전부 | ✅ 실재 |
+| `IBTIP32`(`GetValidatorSet`/`SetValidatorSet`/`GetValidator`/`GetLatestHeight`) hex DTO 인터페이스 | `types/ibtip32.go` | ✅ 실재 |
+| `IBTIP39`(`UpdateValidatorSet`) 인터페이스 | `types/ibtip39.go` | ✅ 실재 |
+
+→ **on-bprn은 감사 리포트가 지적한 갭이 전부 해소됨.** 위쪽 본문의 "2026-05-26 (구현 세션)" 항목들은 모두 위 두 커밋으로 푸시·머지됐다.
+
+#### 1.B on-bpun (`verifier/on-bpun/`) — 구현 ↔ 문서 갭
+
+**현재 실재하는 contracts/** (실측):
+```
+contracts/
+├── BTIP26Dapp.sol          (구 MockDApp 리네임)
+├── LinkerEndpoint.sol
+├── LinkerNullifier.sol
+├── LinkerVerifier.sol
+├── LinkerPolicy.sol
+├── LinkerPolicyVerifier.sol      ← 정책 엔진 (signatureRuleTree, implicitMetaPolicy)
+├── LinkerPolicyLib.sol           ← 정책 평가 라이브러리
+├── LinkerPolicyTypes.sol         ← 정책 타입 (ConfigBlockInfo, SignatureRuleTree 등)
+├── SignatureVerifier.sol         ← 인증서/서명 검증 분리
+├── LinkerRegistry.sol            ← BTIP-37 구현 (Ownable, (chainId, role) 키)
+├── interfaces/
+│   ├── IBTIP21.sol  IBTIP22.sol  IBTIP23.sol  IBTIP24.sol  IBTIP26.sol
+│   └── IBTIP37.sol               ← BTIP-37 인터페이스
+└── lib/
+    ├── MSPRoleLib.sol            ← MSP role 평가
+    ├── P256Verify.sol            ← 0x0100 precompile 래퍼
+    └── X509Verify.sol            ← 0xff00 precompile 래퍼
+```
+
+**위 본문 대비 정합 상태**:
+
+| 항목 | 본문 기재 | 실제 코드 | 판정 |
+|------|----------|-----------|------|
+| BTIP-37 `IBTIP37`/`LinkerRegistry` | 2026-05-26 (구현 세션) "신규" | `interfaces/IBTIP37.sol`/`LinkerRegistry.sol` 실재 (Ownable + `(chainId, role) → address`, `LINKER_*` 상수 4개) | ✅ |
+| 정책 엔진 4종(`LinkerPolicyVerifier`, `LinkerPolicyLib`, `LinkerPolicyTypes`, `SignatureVerifier`) + `lib/{MSPRoleLib,P256Verify,X509Verify}` | **본문 미기재** | 실재(Fabric channel config 기반 endorsement policy 평가) | ⚠️ 문서 갭 — 본 절 §3 신규 기록 |
+| `BTIP26Dapp.sol`(구 MockDApp) | 본문에 "MockDApp → BTIP26Dapp 리네임" 언급 부족 | 실재 | ⚠️ 본문 표 갱신 필요 (아래 본 절 §3) |
+| Foundry 환경 (`foundry.toml`, `test-forge/LinkerGasTest.t.sol`, `mocks/`) | 본문 2026-04-20 (4차) 기재 | 실재 | ✅ |
+| 2PC 산출물 (`onResult`, `LinkerResult`, `handleLinkerResult`, `try/catch`, `nonReentrant`, `MIN_CALLBACK_GAS`, `cancelLinkerEvent` IBTIP26 갱신) | 본문 미기재(설계만 `btips`/`btips-2pc-design`에 존재) | **모두 부재** (`grep` 0건) | ❌ 미구현 — 다음 우선순위 |
+| `IBTIP21` 시그니처 | 본문 2026-04-20 (1차) 기준 (`TxEventProof.mspids`/`block_number`/`event_log_root_proof` 등) | 일치 | ✅ |
+| `IBTIP21.onResult` 추가 (2PC) | 본문 미기재 | 부재 | ❌ 미구현 |
+| `scripts/beatoz/` (`deploy.ts`/`set-policy.ts`/`init-policy.ts`/`submit-proof.ts`/`cancel-event.ts`/`setup.sh`/`utils.ts`) + `send-op-tx.ts` | 본문 표는 `set-policy.ts`/`setup-localnet0.sh`로 기재 | `set-policy.ts`+`init-policy.ts` 둘 다 존재, `setup.sh`만 있고 `setup-localnet0.sh` 없음 | ⚠️ 스크립트명 갱신 (아래 본 절 §3) |
+
+#### 1.C prover-ts (`prover-ts/`) — 부분 정합
+
+| 항목 | 본문 기재 | 실제 코드 | 판정 |
+|------|----------|-----------|------|
+| BTIP-39 Prover `src/prover/btip39/` (`rpc.ts`, `header-merkle.ts`, `validator-set-proof.ts`, `types.ts`, `main.ts`) + `npm run btip39:scan` | 2026-05-26 (구현 세션) "신규" | 실재 (5개 파일, `package.json` `scripts.btip39:scan` 등록) | ✅ |
+| BPuN→BPrN 이벤트 Prover `src/prover/u2r/` (감사: "빈 디렉토리 placeholder") | 본문 표에 "미구현으로 기록" | **디렉토리 자체 부재** (감사 시점의 placeholder도 삭제) | ❌ 여전히 미구현, 시작점 없음 |
+| Fabric SDK | 본문: `fabric-network` v2.2.20 전용 (감사: `@hyperledger/fabric-gateway` 1.7.0 추가됨) | `package.json`에 `fabric-network` 2.2.20 + `@peculiar/x509` + `protobufjs`만 — fabric-gateway 부재 | ✅ 본문(v2.2.20 전용)이 현 상태 정확. 감사의 fabric-gateway 관찰은 stale 또는 별도 클론 추정 |
+| `scripts/test-proof.ts` (구 `test-prove.ts`) | 2026-04-21 항목 | 실재 | ✅ |
+| BPrN forward prover (`prover.service.ts`, `common/{event-log,merkle}.ts`) | 본문 다수 항목 | 실재 | ✅ |
+| Multi-peer block-commit-sig 수집 | 본문 미완료 | 미구현 | ❌ 그대로 미완료 |
+
+### 2. 다음 우선순위 (코드 기준)
+
+감사 리포트의 권장 1·2번 항목은 (이 재동기화로) 해소됐고, 남은 결정적 갭은 다음 두 가지다.
+
+1. **BPuN→BPrN 이벤트 Prover (`u2r`) 구현** — `prover-ts/src/prover/u2r/` 디렉토리부터 신설. 출력은 BTIP-28 `BPuNTxEventProofPayload`(types/types.go 기 정의). BPuN Tendermint RPC(26657)에서 블록·last_results·tx_result·event_attrs·event_attr Proof를 모두 구성해야 함. BTIP-39 Prover(`btip39/header-merkle.ts`)의 헤더 Merkle 인코딩과 v0.34 cdcEncode 로직을 재사용 가능.
+2. **2PC 구현** — 설계는 `btips-2pc-design.md` §1~9 + `btips.md` 2026-05-21/22/27 세션에 완결. 코드 차원에서는:
+   - on-bpun: `IBTIP21.onResult` 추가, `LinkerResult` 이벤트, `LinkerEndpoint.onProof`에 `try/catch`+`nonReentrant`+`MIN_CALLBACK_GAS`+always-emit, `IBTIP26`에 `handleLinkerResult(correlationId, handlerCcApp, accepted)` 추가, `BTIP26Dapp` 콜백 호출자 검증(`LinkerRegistry.getContract(block.chainid, LINKER_ENDPOINT)`).
+   - on-bprn: `linker-endpoint`에 `OnResult` 메소드, `LinkerResultElems` EventLog, `dapp-example`에 `HandleLinkerResult` 콜백, `LinkerEndpointCC.HandleLinkerEvent` 반환을 `(LinkerResultRef, error)` 형태로 변경(BTIP-34).
+3. **on-bpun Prover multi-peer block-commit-sig 수집** — BTIP-17 검증 강도 보강.
+
+### 3. 본문 기재 보강 (본문 표/스크립트 표 등 정정)
+
+다음 본문 항목은 사실 정정이 필요하나 분량이 많아 본 절에 통합 기록하고 본문 표는 *과거 기록 그대로 보존*한다. 이후 작업에서 본문 표 갱신을 분리 진행한다.
+
+- **MockDApp → `BTIP26Dapp.sol`**: 본문 곳곳의 `MockDApp.sol` 참조는 현 파일명 `BTIP26Dapp.sol`로 매핑됨. 인터페이스/이벤트(`LinkerProofReceived`)/구조는 본문 기재대로.
+- **on-bpun 정책 엔진 추가 (본문 미기재)**: BTIP-22 `IBTIP22`의 단순 ABI 인코딩 정책(`abi.decode(policy,(uint256,bytes[]))`)에서 진화하여, Fabric channel config의 endorsement policy를 그대로 평가하는 엔진이 들어옴.
+  - `LinkerPolicyTypes.sol`: `ConfigBlockInfo`, `SignerInfo`, `CertInfo`, `OrgCertificates`, `SignatureRuleTree`, `implicitMetaPolicy` 등 정의.
+  - `LinkerPolicyVerifier.sol`(`IBTIP22` 구현): `verifyBlockValidationPolicy`/`verifyChannelEndorsement(Policy)`/`verifyPolicy` 등. SignatureRuleTree 평가(`_evaluateSignatureRuleTree`)와 implicitMetaPolicy(M-out-of-N at sub-policy) 계산을 수행.
+  - `LinkerPolicyLib.sol`: 정책 트리/조합 평가 헬퍼.
+  - `SignatureVerifier.sol`: 인증서(`X509Verify`)/서명(`P256Verify`) 검증 분리 모듈. `LinkerPolicy`의 `OrgCertificates`(rootCert + intermediateCerts) 조회.
+  - `lib/{MSPRoleLib,P256Verify,X509Verify}.sol`: precompile 래퍼 + MSP role 평가.
+  - 본문 §"BEATOZ EVM Precompiles"의 `0x0100`/`0xff00` 사용처가 직접 `LinkerVerifier`가 아니라 본 정책 엔진을 경유함.
+- **`set-policy.ts` + `init-policy.ts` 공존**: 본문 표는 `set-policy.ts` 단독으로 기재하고 있으나 실제 디렉토리엔 두 스크립트가 모두 존재. 정확한 역할 분리는 스크립트 헤더 코멘트 참조(이번 재동기화에선 미확인).
+- **`setup-localnet0.sh` → `setup.sh`**: 본문 표의 `setup-localnet0.sh`는 실제 파일명 `setup.sh`(`Usage: ./scripts/beatoz/setup.sh <chain>`). 인자 받아 일반화됨.
+- **BTIP26Dapp의 `cancelLinkerEvent` 이벤트 추가**: `event LinkerEventCancelled(bytes32 indexed eventRootHash)` 신설 — 본문 미기재.
+
+### 4. 신뢰 기준 갱신
+
+- 본문(이 문서)은 §"2026-06-01" 시점에 코드 사실에 맞춰 정렬됨. `audit-report-2026-05-28.md`는 *역사 기록*으로 보존하되, "어느 브랜치에도 없음" 판정 항목들은 위 §1.A로 해소됐음을 유의.
+- 향후 본문의 "✅ 완료" 표기는 *코드에 푸시된 시점의 기록*임을 명확히 하기 위해 가능하면 커밋 해시 동반 기록 권장(예: `…(반영: f414756)`).
 
