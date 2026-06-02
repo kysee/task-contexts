@@ -761,6 +761,13 @@ contracts/
 | `BTIP26Dapp.sol`(구 MockDApp) | 본문에 "MockDApp → BTIP26Dapp 리네임" 언급 부족 | 실재 | ⚠️ 본문 표 갱신 필요 (아래 본 절 §3) |
 | Foundry 환경 (`foundry.toml`, `test-forge/LinkerGasTest.t.sol`, `mocks/`) | 본문 2026-04-20 (4차) 기재 | 실재 | ✅ |
 | 2PC 산출물 (`onResult`, `LinkerResult`, `handleLinkerResult`, `try/catch`, `nonReentrant`, `MIN_CALLBACK_GAS`, `cancelLinkerEvent` IBTIP26 갱신) | 본문 미기재(설계만 `btips`/`btips-2pc-design`에 존재) | **모두 부재** (`grep` 0건) | ❌ 미구현 — 다음 우선순위 |
+| **IBTIP21 setter 정리**(`setNullifierContract`/`setVerifierContract` 제거 → `setRegistry` 단일화, LinkerRegistry 동적 조회) — BTIP-29(BPrN)에 이미 적용된 정합 | 본문(linker-v2.md) 미기재 — 2026-06-01 BTIP-21 명문화로 합의됨 | `setNullifierContract`/`setVerifierContract` 두 setter가 `IBTIP21.sol`(L34/37) + `LinkerEndpoint.sol`(L50/56) 양쪽에 잔존, `setRegistry` 부재 | ❌ 미구현 — 다음 우선순위 (2PC와 함께 또는 선행) |
+| **IBTIP23 setter 정리**(`setPolicyContract` 제거 → `setRegistry` 단일화, LinkerRegistry로 LinkerPolicy 동적 조회) | 본문 미기재 — 2026-06-01 BTIP-23 명문화 | `setPolicyContract` 잔존(`LinkerVerifier.sol`/`IBTIP23.sol`), `setRegistry` 부재 | ❌ 미구현 |
+| **IBTIP24 setter 정리**(`setRegistry` 신설, onlyLinkerEndpoint를 LinkerRegistry 동적 조회로) | 본문 미기재 — 2026-06-01 BTIP-24 명문화 | LinkerEndpoint 주소 보관 setter가 잔존(있다면), `setRegistry` 부재 | ❌ 미구현 |
+| **BTIP-23 Step 2~4 위임**(verifyProof에서 `LinkerPolicy.verifyChannelEndorsementPolicy` 단일 호출, precompile 직접 호출 제거) | 본문 미기재 — 2026-06-01 BTIP-23 명문화 | `LinkerVerifier.sol`이 정책 엔진(LinkerPolicyVerifier 등)과 어떻게 결합돼 있는지 별도 확인 필요. *위임 패턴이 일치하면 ✅, 아니면 갭* | ⚠️ 코드 재확인 필요 |
+| **BTIP-40 `LinkerTransfer` Solidity event 표준**(`event LinkerTransfer(address indexed from, address indexed to, uint256 amount, bytes32 indexed correlationId, bytes memo)`) | 본문 미기재 — 2026-06-01 BTIP-40 신규 | 표준 event 정의 부재(현 BTIP26Dapp은 자체 `LinkerProofReceived` event 사용) | ❌ 미구현 — *결제 use case dApp이 채택 필요* |
+| **BTIP-26 `LinkerAppLowGas` 표준 custom error**(권장 보호 패턴 — dApp이 `revert LinkerAppLowGas()` 시 LinkerEndpoint가 catch에서 인식해 전체 revert) | 본문 미기재 — 2026-06-01 BTIP-26 명문화 | `LinkerAppLowGas` 정의/사용 부재. BTIP26Dapp.sol·LinkerEndpoint.sol 모두 미반영 | ❌ 미구현 (권장 옵션이므로 우선순위 낮음) |
+| **BTIP-37 LINKER_CCS NOTE 제거** | 본문 미기재 — 2026-06-01 BTIP-37 명문화 | `LinkerRegistry.sol`이 LINKER_* 상수 4개만 보유 — LINKER_CCS 미구현 상태로 일치 | ✅ |
 | `IBTIP21` 시그니처 | 본문 2026-04-20 (1차) 기준 (`TxEventProof.mspids`/`block_number`/`event_log_root_proof` 등) | 일치 | ✅ |
 | `IBTIP21.onResult` 추가 (2PC) | 본문 미기재 | 부재 | ❌ 미구현 |
 | `scripts/beatoz/` (`deploy.ts`/`set-policy.ts`/`init-policy.ts`/`submit-proof.ts`/`cancel-event.ts`/`setup.sh`/`utils.ts`) + `send-op-tx.ts` | 본문 표는 `set-policy.ts`/`setup-localnet0.sh`로 기재 | `set-policy.ts`+`init-policy.ts` 둘 다 존재, `setup.sh`만 있고 `setup-localnet0.sh` 없음 | ⚠️ 스크립트명 갱신 (아래 본 절 §3) |

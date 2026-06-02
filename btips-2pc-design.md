@@ -63,13 +63,18 @@ related: ./btips.md
 - **유일한 잔여 리스크**: BPuN이 결과 산출 전 영구 정지/포크 이탈 시 동결 → 결정 7(운영 정책)로 통제.
 - **추가 이점**: finalize 제출이 자연 인센티브로 정해짐(아래) + "한 번 잠그면 BPuN 결과만이 해제"라는 깔끔한 불변식(대기 중 일방 취소 불가 → front-run 방지).
 
-### 결정 5 — correlationId = 정방향 `tx_event_root`
-- **무엇**: 에스크로 키 = LinkerResult.correlationId = 정방향 이벤트의 `tx_event_root`.
-- **의도/검증**(현재 btip-16/24 기준 확인 완료):
-  - **유일성** ✅: `tx_id`가 BTIP16 머클트리 gidx:2에 커밋됨 → 동일 내용 결제도 tx_id로 구별. btip-24도 "tx_event_root만으로 BPrN tx를 전 세계 고유 식별" 명시.
-  - **lock 시점 계산 가능** ✅: tx_event_root는 `(channel_id, chaincode_id, tx_id, selector, elems)`만으로 결정 → 발신 체인코드가 실행 시점에 직접 계산 가능. (반면 `(blockNumber, txIndex)`는 ordering 시점에 정해져 실행 중 모름 → 부적합)
-  - **Nullifier와 통일** ✅: btip-24 Nullifier가 이미 tx_event_root 기준. correlationId=Nullifier 기준값 → 식별자 하나로 통일 + content-bound.
-- **`tx_id`보다 우월한 이유**: tx_id는 단순 식별자(통일·바인딩 없음). tx_event_root는 위 3가지를 모두 만족 + 내용에 암호학적 바인딩.
+### 결정 5 — correlationId = 발신자가 정한 명시 id (양 체인 통일)
+
+> **2026-06-01 정정**: 본 결정의 *최초 형태*(BPrN-origin은 `tx_event_root` 내재값 / BPuN-origin은 명시 id, 방향별 비대칭)가 §6 D-A에 정당화되어 있었으나, BTIP-25/40 작업에서 *양 체인 모두 명시 id로 통일*로 재결정됐다(BTIP-25 `TransferLogElems.CorrelationId: bytes32`, BTIP-40 `LinkerTransfer(...,bytes32 indexed correlationId,...)`). 본 절은 *현재 결정*만 기술하고, 폐기된 비대칭 모델은 §6 D-A에 historical로 보존.
+
+- **무엇**: 에스크로 키 = LinkerResult.correlationId = **발신자(dApp/ccApp)가 자기 컨트랙트 안에서 유일하도록 정한 명시 식별자**(예: 단조 증가 nonce). 양 체인 동일.
+- **의도/검증**:
+  - **유일성**: 컨트랙트 안에서만 유일하면 충분 — 결과는 발신자 컨트랙트로만 라우팅되므로 *그 컨트랙트의 매칭 네임스페이스* 안에서만 사용된다. 전역 유일성 불요.
+  - **lock 시점 결정 가능** ✅: 발신자가 자기 상태(nonce 등)로 결정하므로 항상 가용.
+  - **node-format 결합 회피** ✅: BPuN(EVM) 발신자가 *내재값*(`tx_event_root` 또는 `event_attrs_root`)을 lock 시점에 계산하려면 노드의 evmLogsToEvent 직렬화 포맷에 강결합 — 그 결합을 양 체인 모두 회피.
+  - **Nullifier와 분리** ✅: Nullifier는 여전히 `tx_event_root`(BPrN) / `event_attrs_root`(BPuN) 기준 (BTIP24/33) — *재생 방지*. correlationId는 *매칭* — 의미가 다르므로 분리.
+- **fire-and-forget**: correlationId 필드는 *2PC를 쓸 때* 박는 발신자 옵션. fire-and-forget이면 미사용(BTIP-29의 `CorrelationIndex<0` 신호 또는 발신자가 correlationId 미설정).
+- **양 체인 발신 이벤트에 명시 필드**: BPrN — BTIP-25 `TransferLogElems.CorrelationId: bytes32`. BPuN — BTIP-40 `event LinkerTransfer(..., bytes32 indexed correlationId, ...)`.
 
 ### 결정 6 — onProof vs OnResult 분리
 - **무엇**: 정방향 증명은 BPuN `btip-21.onProof`가 소비(LinkerResult emit). LinkerResult 증명은 BPrN `btip-29.OnResult`가 소비(→ btip-34.HandleLinkerResult).
@@ -119,11 +124,14 @@ BPrN-origin의 거울상(결제·요청이 BPuN에서 발생 → BPrN 앱 체인
 
 ### 핵심 결정과 의도
 
-**D-A. correlationId 출처의 방향별 비대칭** (가장 많이 논의)
-- BPrN-origin: `tx_event_root`(**내재값** — EP가 증명에서 공짜로 가짐, 발신 체인코드가 BTIP16으로 계산 가능). 유지.
-- BPuN-origin: **발신 컨트랙트가 정한 명시 id**(nonce). 이유 — BPuN(EVM) 발신 컨트랙트가 event_attrs_root를 lock 시점에 계산하려면 beatoz-go `evmLogsToEvent` 인코딩(소문자 주소/대문자 topic/10진수 blockNumber/data 생략/순서)에 **강결합**되어 노드 포맷 변경 시 모든 컨트랙트가 깨짐. 그 결합을 피하려 명시 id 채택.
+**D-A. correlationId 출처의 방향별 비대칭** (historical — 2026-06-01 폐기)
+
+> **2026-06-01 정정**: 본 방향별 비대칭은 폐기. 양 체인 모두 *발신자 정한 명시 id로 통일*(§5 갱신본 참조). 아래는 폐기된 비대칭 모델의 *historical 기록* — 폐기 근거는 §5의 *node-format 결합 회피* 항목으로 통합됨(이제 양 체인 모두 동일 이유로 명시 id 사용).
+
+- ~~BPrN-origin: `tx_event_root`(**내재값** — EP가 증명에서 공짜로 가짐, 발신 체인코드가 BTIP16으로 계산 가능). 유지.~~ → **명시 id로 변경**
+- BPuN-origin: **발신 컨트랙트가 정한 명시 id**(nonce). 이유 — BPuN(EVM) 발신 컨트랙트가 event_attrs_root를 lock 시점에 계산하려면 beatoz-go `evmLogsToEvent` 인코딩(소문자 주소/대문자 topic/10진수 blockNumber/data 생략/순서)에 **강결합**되어 노드 포맷 변경 시 모든 컨트랙트가 깨짐. 그 결합을 피하려 명시 id 채택. → **양 체인에 동일 근거로 적용, 비대칭 폐기.**
 - **검증 완료**: `evmLogsToEvent`([ctrler.go:339](~/go/src/github.com/beatoz/beatoz-go/ctrlers/vm/evm/ctrler.go)) 확인 — contractAddress=`address(this)`, topics/data=컨트랙트 생성, blockNumber=`block.number`(=l.BlockNumber), removed=항상 `"false"`(BFT 즉시완결+emit시점). 즉 계산은 *가능*하나 결합 위험 때문에 명시 id 선택.
-- correlationId(매칭)와 Nullifier(재생방지)는 **분리** — Nullifier는 여전히 tx_event_root/event_attrs_root 기준.
+- correlationId(매칭)와 Nullifier(재생방지)는 **분리** — Nullifier는 여전히 tx_event_root/event_attrs_root 기준. *(이 명제는 양 체인 통일 후에도 유지)*
 
 **D-B. 거부 표현의 방향별 비대칭** (EVM vs HLF 본질 차이)
 - BPuN dApp(btip-26): 거부=`revert` → EVM이 자동 롤백 → "거부=무부작용" 강제.
@@ -134,9 +142,14 @@ BPrN-origin의 거울상(결제·요청이 BPuN에서 발생 → BPrN 앱 체인
 - 앱 체인코드는 자기 스킴을 알므로 correlationId가 위치한 **인덱스(gidx)** 를 반환. EP는 **검증·확보한 values에서 그 인덱스 값**을 correlationId로 사용 → 앱 체인코드가 값을 위조 못 함(다른 escrow로 라우팅 불가, 기껏 self-griefing).
 - `CorrelationIndex < 0` → fire-and-forget(LinkerResultElems 미발행). 이게 #2의 opt-in 신호.
 
-**D-D. fire-and-forget 처리의 방향별 비대칭**
-- #1(btip-21): correlationId가 내재(tx_event_root)+거부가 revert(신호 못 실음) → **always-emit**(fire-and-forget도 안 쓰이는 LinkerResult 발행, 무해).
-- #2(btip-29): correlationId가 명시(비내재)+거부가 리턴값 → **opt-in**(CorrelationIndex<0이면 ProofVerifiedEventElems, ≥0이면 LinkerResultElems).
+**D-D. fire-and-forget 처리의 방향별 비대칭** (historical — 2026-06-01 부분 폐기)
+
+> **2026-06-01 정정**: correlationId가 양 체인 통일(명시 id, §5)됐으므로 *내재값/명시값 차이에서 비롯된 비대칭 정당화*는 폐기. 단 *거부 표현*(EVM revert vs Fabric `accepted=false`)의 비대칭(D-B)은 그대로 유지되므로 fire-and-forget 처리 방식의 비대칭도 일부 남는다.
+
+- #1(btip-21): ~~correlationId가 내재(tx_event_root)~~ + 거부가 revert(신호 못 실음) → **always-emit**(fire-and-forget도 안 쓰이는 LinkerResult 발행, 무해). *이유: revert는 리턴값으로 신호를 실을 수 없음. correlationId 출처와 무관.*
+- #2(btip-29): ~~correlationId가 명시(비내재)~~ + 거부가 리턴값 → **opt-in**(CorrelationIndex<0이면 ProofVerifiedEventElems, ≥0이면 LinkerResultElems). *이유: Fabric은 리턴값으로 신호 가능. correlationId 출처와 무관.*
+
+→ 비대칭의 본질은 *거부 표현(revert vs 리턴값)* 차이이지 correlationId 출처가 아님. 양 체인 통일 후에도 fire-and-forget 처리는 D-B 차이로 비대칭이 유지된다.
 
 **D-E. 이벤트 정의 네이밍**: BPuN쪽은 Solidity 이벤트 `LinkerResult`, BPrN쪽은 EventLog elems 정의라 `LinkerResultElems`(TransferEventElems/ProofVerifiedEventElems 관례).
 

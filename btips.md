@@ -262,13 +262,106 @@ publish 폐기 후속으로 결제 트리거 이벤트의 표준을 *이벤트 �
 - §5 결정(correlationId = `tx_event_root`)이 본 결정으로 *명시 id 전환*. §5 본문 갱신 필요. Nullifier 기준(`tx_event_root`)과 correlationId의 의미 분리도 함께 기록.
 - §6 OnResult 분리·라우팅 의미는 영향 없음(여전히 발신 (cc)App으로 라우팅, correlationId가 매칭 키).
 
+#### ✅ btip-21.md — setter 정리 + LinkerRegistry 조회 통합 (BTIP-29 대칭)
+
+BPrN 측 [BTIP-29](./btip-29.md)는 2026-05-28에 이미 `SetVerifierChaincodeID`/`SetNullifierChaincodeID` 제거 → `SetRegistryID` 단일화가 적용됐으나, BPuN 측 BTIP-21에는 미적용 상태였음. 본 세션에서 정합.
+
+**변경 내역**:
+- `requires`: `btip20` → `btip20, btip37`.
+- `setNullifierContract`/`setVerifierContract` 2개 setter *제거*.
+- 단일 부트스트랩 setter `setRegistry(address registry)` 신설 — `Ownable.onlyOwner`. 모든 다른 Linker 컴포넌트는 LinkerRegistry를 통해 `(bytes32(block.chainid), role)` 키로 동적 조회.
+- `onProof` 슈도코드: "컴포넌트 조회" 단계 추가 (`BTIP37(_registry).getContract(self_chain, LINKER_VERIFIER/LINKER_NULLIFIER)`).
+- `onResult` 슈도코드: 동일 + 추가로 `getContract(BPRN_CHAIN_ID, LINKER_ENDPOINT)` 조회로 출처 검증.
+- 기존 `> [!NOTE]` LinkerRegistry 진본 NOTE 제거(이제 본 메소드 자체가 LinkerRegistry 사용을 강제).
+- **owner 모델 NOTE 추가**: `Ownable` 수준의 단순 owner 검증을 적합성 기준으로 명시. 사용자 결정 — Linker를 모듈별로 구성한 설계 의도(Nullifier/Verifier/Policy/Registry까지 모두 *주소 변경*으로 모듈 업그레이드 가능)에 immutable이 맞지 않음. multisig+timelock 같은 강한 거버넌스는 *별도 BTIP*로 정의될 수 있다고 NOTE로 미래 확장 여지 남김.
+
+**근거**: LinkerRegistry가 `(chainId, role) → address` 단일 출처를 제공하는 이상, LinkerEndpoint가 LinkerVerifier·LinkerNullifier 주소를 자기 상태로 저장할 필요가 없음. LinkerRegistry 한 곳만 알면 거버넌스가 LinkerRegistry에서 컴포넌트 주소를 재지정해도 별도 마이그레이션 없이 즉시 반영됨.
+
+**linker-v2 코드 갭**: `IBTIP21.sol`(L34/37)·`LinkerEndpoint.sol`(L50/56)에 두 setter가 잔존, `setRegistry` 부재. `task-contexts/linker-v2.md` §"2026-06-01 — 재동기화" §1.B 표에 항목 추가.
+
+#### ✅ btip-21.md / btip-26.md — 재진입·가스 항목 정정 + LinkerAppLowGas 권장 패턴
+
+기존 BTIP-21 "재진입·가스" 항목이 *부당 REJECTED 영구 기록*을 완전 방어하지 못함을 토론으로 확인. 해당 항목이 *거짓 안전감*만 주는 상태였음. 정정 방향:
+
+**부당 REJECTED griefing 분석** (BTIP-21 본문에 명시 추가):
+- 자금 손실 ❌ (BPrN에서 REFUNDED로 환불, 두 체인 상태 일관)
+- *서비스 가용성 공격* ⚠️ — `onProof`가 permissionless이므로 제3자가 낮은 gas limit으로 호출해 dApp을 OOG로 죽이고 영구 REJECTED 강제 가능. 판매자에게 결제 전달 안 됨.
+
+**EVM의 본질적 제약**: 2PC의 *exactly-one-result*와 가스 보호는 본질적으로 충돌. try/catch가 OOG와 비즈니스 revert를 구별 못 함. 완전 방어 불가능.
+
+**정정 결정** (사용자 redirect):
+- BTIP-21에서 `MIN_CALLBACK_GAS` + `CATCH_RESERVE` + 사전 require 패턴 *제거*. 부당 REJECTED를 완전히 막지 못하면서 거짓 안전감만 줌.
+- 대신 *부당 REJECTED 위험을 솔직히 명시* — 자금 안전·서비스 가용성 분리, EVM 한계, 호출자·dApp 책임 영역 분명히.
+- dApp 협조 패턴으로 *명시적 가스 부족*은 완화 가능 — `LinkerAppLowGas` custom error를 BTIP-26 표준으로 도입.
+
+**btip-21.md 변경**:
+- "재진입·가스" 단일 항목 → "재진입 가드" + "가스 처리와 한계" 두 항목으로 분리.
+- `MIN_CALLBACK_GAS`/`CATCH_RESERVE`/사전 require 모두 제거. EIP-150 63/64 룰이 catch 가스를 자연 보장한다는 사실 명시.
+- 부당 REJECTED griefing 위험 솔직히 박음. dApp 협조 패턴(BTIP-26) cross-ref.
+- onProof 슈도코드에 `except (BTIP26.LinkerAppLowGas): revert BTIP26.LinkerAppLowGas` 분기 추가 — 표준 가스 부족 신호 인식 시 *같은 에러를 그대로 전파*해 전체 revert(Nullifier 미등록).
+- `error LinkerAppLowGas()` *BTIP-26에 단일 정의* — 이름의 의미 주체가 LinkerApp(=dApp)이므로 LinkerApp 인터페이스 BTIP에 정의가 자연. BTIP-21은 catch에서 `BTIP26.LinkerAppLowGas` selector 인식 후 같은 에러로 전파(import).
+
+**btip-26.md 변경**:
+- interface에 `error LinkerAppLowGas()` 표준 custom error 정의.
+- "권장 패턴 — 명시적 가스 부족 신호" NOTE 추가:
+  - dApp이 함수 시작에서 `if (gasleft() < MY_MIN_REQUIRED_GAS) revert LinkerAppLowGas();` 패턴 권장 (강제 아님).
+  - LinkerEndpoint가 catch에서 이 신호 인식 → 전체 revert (Nullifier 미등록, 재시도 가능).
+  - 그 외 revert(다른 custom error, Error string, Panic, EVM 암묵적 OOG)는 모두 일반 REJECTED.
+  - 한계 솔직히: EVM 암묵적 OOG는 보호 못 함. *명시적* gas 부족 grief 차단에 한정.
+
+**판단 근거**: `feedback-btip-scope-discipline` 메모리 적용 — BTIP에 *불완전한 보호 메커니즘*을 박는 것보다 *한계를 솔직히 명시*하는 게 안전. dApp이 자율 보호 옵션을 갖게 BTIP-26에 권장 패턴으로만 둠.
+
+#### ✅ btip-23.md / btip-22.md — 보증 신뢰 검증을 LinkerPolicy로 위임 (BTIP-19 Step 2~4)
+
+`BTIP-23`(LinkerVerifier on BPuN)이 [BTIP-19](./btip-19.md) `verify_event_proof`의 Step 2~6 책임이라는 사실은 변함 없으나, **Step 2~4(보증 신뢰)는 [BTIP-22](./btip-22.md)(LinkerPolicy)의 `verifyChannelEndorsementPolicy`에 단일 호출로 위임**하고 BTIP-23은 **Step 5~6(머클 증명)만 직접 수행**하도록 책임 분리 명문화.
+
+**btip-23.md 변경**:
+- `requires`: `btip19, btip20` → `btip19, btip20, btip22`.
+- Abstract — 위임/직접 매핑 명시.
+- Interface 설명 — verifyProof가 위임 진입점임을 명확화.
+- Implementation 절 전면 재작성:
+  - Step 2~6 매핑 표 추가 (각 Step의 담당이 BTIP-22 vs BTIP-23).
+  - 슈도코드 — Step 2~4는 `LinkerPolicy.verifyChannelEndorsementPolicy(msg_hash, sigs, mspids, cert_chains)` 단일 호출, msg_hash는 BTIP-17 규약(`sha256(block_height_BE_8 || block_event_root)`). Step 5는 `block_event_root` 트리에서 `tx_event_root` 머클 검증, Step 6은 `tx_event_root` 트리에서 개별 이벤트 요소 검증.
+  - precompile 설명 제거 — BTIP-22가 모든 precompile(0xff00/0x0100)을 호출하므로 본 BTIP는 직접 호출 안 함. 상세는 BTIP-22 참조.
+- Conclusion — 책임 단위 분리 의의 명시(정책 의존 검증 vs 정책 무관 순수 해시 검증).
+
+**btip-22.md 변경**:
+- Abstract 직후에 NOTE 추가 — BTIP-19 `verify_event_proof` Step 2/3/4와 본 함수 내부 Step 1/3/2(인증서/정책/서명)의 매핑 표. 본 함수의 *Step 순서가 BTIP-19와 다른 이유*(서명 검증을 인증서 추출 결과 위에서 수행 → 정책 평가 입력) 설명. 외부 시각에서는 *Step 2~4의 원자적 위임 수행*과 동등.
+
+**잔존 미해결 (별도 작업)**:
+- ~~BTIP-23의 `setPolicyContract` setter는 BTIP-21의 `setRegistry` 패턴(LinkerRegistry 동적 조회)과 정합 안 됨.~~ — 같은 세션 내 처리(아래 BTIP-23/24 setter 정합 항목 참조).
+
+#### ✅ btip-23.md / btip-24.md — setter 정합 (BTIP-21 패턴 적용)
+
+[BTIP-21](./btip-21.md)에서 도입한 *모든 컴포넌트가 LinkerRegistry 한 곳만 알면 됨* 패턴을 BTIP-23/24로 확장. 모듈별 주소 변경을 LinkerRegistry 매핑 갱신으로 처리하는 일관된 설계.
+
+**btip-23.md 변경**:
+- `requires`: `btip19, btip20, btip22` → `btip19, btip20, btip22, btip37`.
+- Interface: `setPolicyContract(address)` 제거 → `setRegistry(address)` 단일 setter. owner only(`Ownable.onlyOwner`).
+- verifyProof 슈도코드: 진입 시점에 `policy = BTIP37(_registry).getContract(bytes32(block.chainid), LINKER_POLICY)` 동적 조회 후 그 주소로 `BTIP22(policy).verifyChannelEndorsementPolicy(...)` 호출.
+- setRegistry 설명에 BTIP-21의 동일 메소드 cross-ref.
+
+**btip-24.md 변경**:
+- `requires`: `btip20` → `btip20, btip37`.
+- Interface에 `setRegistry(address)` 추가. owner only.
+- markProcessed의 onlyLinkerEndpoint 접근 제어를 LinkerRegistry 동적 조회로 명시 — `expected = BTIP37(_registry).getContract(bytes32(block.chainid), LINKER_ENDPOINT); assert msg.sender == expected`.
+- 본문 설명에 "LinkerEndpoint 호출자 검증은 LinkerRegistry를 통해 동적 조회되므로 개별 setter는 두지 않는다" 명시. BTIP-21 cross-ref.
+
+**근거**: 모든 BPuN-side Linker 컴포넌트(LinkerEndpoint/LinkerVerifier/LinkerNullifier)가 *LinkerRegistry 주소 하나만 자기 상태로 보유*. 다른 컴포넌트 주소·호출자 신원은 모두 LinkerRegistry 동적 조회로 처리. 거버넌스가 LinkerRegistry 매핑을 갱신하면 모든 컴포넌트가 *재배포 없이* 새 주소를 즉시 반영.
+
+**linker-v2 코드 갭** (추가): `LinkerVerifier.sol`에 `setPolicyContract` 잔존, `LinkerNullifier.sol`에 `setLinkerEndpoint`(또는 동등) 잔존, 양쪽 모두 `setRegistry` 부재. `linker-v2.md` 다음 갱신 시 §1.B 표에 추가.
+
 #### 본 세션 최종 BTIP 변경 요약
 
 - ✅ **btip-37.md**: `LINKER_CCS` role NOTE 제거 (L48-58).
-- ✅ **btip-25.md**: rename(`TransferEventElems` → `LinkerTransferElems`) + 제목 변경 + `CorrelationId` 필드 추가 + 머클 트리 갱신.
-- ✅ **btip-40.md**: 신규 — `LinkerTransfer` Solidity event 표준 정의.
+- ✅ **btip-25.md**: rename(`TransferEventElems` → `TransferLogElems`) + 제목 변경 + `CorrelationId` 필드 추가 + 머클 트리 갱신.
+- ✅ **btip-40.md**: 신규 — `LinkerTransfer` Solidity event 표준 정의 (`TransferLogAttrs`).
+- ✅ **btip-21.md**: setter 2개 제거 + `setRegistry` 단일화 + LinkerRegistry 동적 조회 패턴 통합 + 재진입·가스 항목 정정(MIN_CALLBACK_GAS 제거, griefing 위험 명시, LinkerAppLowGas 분기 추가).
+- ✅ **btip-26.md**: `LinkerAppLowGas` 표준 custom error 신규 + 권장 보호 패턴 NOTE.
+- ✅ **btip-23.md**: BTIP-19 Step 2~4 위임 매핑 명시 + Step 5~6 슈도코드 신설 + precompile 설명 제거 + setter 정합(`setPolicyContract` → `setRegistry`, LinkerRegistry 동적 조회).
+- ⚠️ **btip-22.md**: 본 세션 추가 NOTE 시도 후 사용자 롤백 + precompile 정보 추가.
+- ✅ **btip-24.md**: setter 정합(`setRegistry` 신설, onlyLinkerEndpoint를 LinkerRegistry 동적 조회로).
 - ✅ **BTIPS/README.md**: BTIP-25 제목 갱신 + BTIP-40 등재.
-- ❎ **btip-26.md**: 변경 *없음*(시도했던 두 블록 모두 삭제).
 - ❎ **btip-34.md**: 변경 *없음*(시도했던 두 블록 모두 삭제).
 
 #### 다음 작업
