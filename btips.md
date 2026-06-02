@@ -279,6 +279,26 @@ BPrN 측 [BTIP-29](./btip-29.md)는 2026-05-28에 이미 `SetVerifierChaincodeID
 
 **linker-v2 코드 갭**: `IBTIP21.sol`(L34/37)·`LinkerEndpoint.sol`(L50/56)에 두 setter가 잔존, `setRegistry` 부재. `task-contexts/linker-v2.md` §"2026-06-01 — 재동기화" §1.B 표에 항목 추가.
 
+#### ✅ btip-25.md / btip-40.md — 이벤트 이름·자료구조명·selector 일관화
+
+이전 정정 사이클에서 *자료구조명*은 `TransferLogElems`/`TransferLogAttrs`(Linker prefix 없음)로 박혔으나 *selector 입력 이벤트 이름*은 `LinkerTransfer`로 박혀 한 BTIP 안에서 두 어휘가 섞여 있었음. 사용자 결정으로 **이벤트 이름·자료구조명·selector를 한 어휘로 일관화**:
+
+- **BPrN**(BTIP-25): 이벤트 이름·자료구조명 = `TransferLogElems`. selector = `sha256("TransferLogElems(bytes,bytes,uint256,bytes32,bytes)")`.
+- **BPuN**(BTIP-40): 이벤트 이름 = `TransferLogAttrs`. Solidity `event TransferLogAttrs(...)`. selector = `keccak256("TransferLogAttrs(address,address,uint256,bytes32,bytes)")`.
+
+**변경 사항**:
+- BTIP-25/40 제목 변경: `LinkerTransfer Event on BPrN/BPuN` → `TransferLogElems on BPrN` / `TransferLogAttrs on BPuN`.
+- 본문 모든 `LinkerTransfer` 참조 → 자기 체인 이벤트 이름(`TransferLogElems` / `TransferLogAttrs`)으로.
+- selector 식·표 행 갱신.
+- BTIP-40 Symmetry 표: "이벤트 이름" 행이 양 체인 다름(`TransferLogElems` vs `TransferLogAttrs`), 자료구조명 별도 행 제거(이벤트 이름과 동일하므로). selector 식도 정확히 명시.
+- BTIP-40 Event Log NOTE: "이벤트 이름은 양 체인 공통" → "필드 시퀀스만 공통, 이벤트 이름은 형식별 어휘"로 정정.
+- Abstract/Conclusion 정합.
+- README 등재명 갱신.
+
+**비대칭 정당화**:
+- 각 체인의 직렬화 형식 어휘(`LogElems` = Fabric EventLog.elems, `LogAttrs` = ABCI Event attributes)를 *이벤트 이름에 그대로* 반영. 두 체인의 자료구조 표현이 본질적으로 다르므로 이벤트 이름도 비대칭이 자연.
+- 공통 어휘는 *Event Log*(BTIP-40 NOTE). 이벤트 이름 prefix `TransferLog` 공통, 접미사로 형식 구별.
+
 #### ✅ btip-21.md / btip-26.md — 재진입·가스 항목 정정 + LinkerAppLowGas 권장 패턴
 
 기존 BTIP-21 "재진입·가스" 항목이 *부당 REJECTED 영구 기록*을 완전 방어하지 못함을 토론으로 확인. 해당 항목이 *거짓 안전감*만 주는 상태였음. 정정 방향:
@@ -363,6 +383,29 @@ BPrN 측 [BTIP-29](./btip-29.md)는 2026-05-28에 이미 `SetVerifierChaincodeID
 
 DEPRECATED 파일(btip-10/11/12/13)은 historical 기록으로 보존 — 변경 없음.
 
+#### ✅ btip-24.md / btip-21.md — markProcessed 내부 revert로 변경
+
+`markProcessed`가 `bool wasDup`을 반환하고 호출자가 `assert not wasDup`로 분기하던 패턴을, **markProcessed 내부에서 직접 `DuplicateProof`로 revert**하는 단순화로 변경. 호출자(LinkerEndpoint)는 리턴값 체크 없이 정상 반환되면 새 등록 성공으로 간주.
+
+**변경 사항**:
+- **btip-24.md**:
+  - `error DuplicateProof(bytes32 eventRootHash, address targetDApp)` 신설 정의(이전엔 BTIP-21에 있었음).
+  - `markProcessed` 시그니처: `returns (bool wasDup)` 제거 → 리턴 없음.
+  - 슈도코드: `return True/False` → `revert DuplicateProof(...)` / 새 등록.
+  - 본문·호출 순서 설명 갱신.
+- **btip-21.md**:
+  - interface에서 `error DuplicateProof(...)` 정의 제거. 주석으로 BTIP-24 cross-ref만.
+  - 슈도코드 두 곳(onProof/onResult): `wasDup = markProcessed(...)` + `assert not wasDup, DuplicateProof(...)` → `markProcessed(...)` 단순 호출 (자동 전파).
+  - 본문 설명 정리(중복 처리 = BTIP-24 revert 자동 전파).
+
+**근거**:
+- `LinkerAppLowGas`(BTIP-26 발신 주체)와 동일 패턴 — **발신 주체가 에러 정의 + 직접 revert, 호출자는 자동 전파**.
+- 함수명(`markProcessed`)과 동작이 일치 — 정상 반환이면 마킹 성공, revert면 중복.
+- 호출자 코드 간소화 — 리턴값 체크 분기 제거.
+
+**linker-v2 코드 갭** (추가):
+- `IBTIP24.sol` / `LinkerNullifier.sol`이 `markProcessed returns (bool wasDup)` 패턴으로 구현돼 있을 것(2026-04-21 도입). `DuplicateProof`는 `IBTIP21.sol`에 정의돼 있을 것. 새 BTIP에 맞춰 정의 이동(BTIP-21 → BTIP-24) + 시그니처 변경(`returns (bool)` 제거) + 슈도코드(`revert DuplicateProof`) 반영 필요.
+
 #### ✅ btip-23.md / btip-24.md — setter 정합 (BTIP-21 패턴 적용)
 
 [BTIP-21](./btip-21.md)에서 도입한 *모든 컴포넌트가 LinkerRegistry 한 곳만 알면 됨* 패턴을 BTIP-23/24로 확장. 모듈별 주소 변경을 LinkerRegistry 매핑 갱신으로 처리하는 일관된 설계.
@@ -383,24 +426,80 @@ DEPRECATED 파일(btip-10/11/12/13)은 historical 기록으로 보존 — 변경
 
 **linker-v2 코드 갭** (추가): `LinkerVerifier.sol`에 `setPolicyContract` 잔존, `LinkerNullifier.sol`에 `setLinkerEndpoint`(또는 동등) 잔존, 양쪽 모두 `setRegistry` 부재. `linker-v2.md` 다음 갱신 시 §1.B 표에 추가.
 
-#### 본 세션 최종 BTIP 변경 요약
+#### 본 세션 최종 BTIP 변경 요약 (세션 종료 시점)
 
-- ✅ **btip-37.md**: `LINKER_CCS` role NOTE 제거 (L48-58).
-- ✅ **btip-25.md**: rename(`TransferEventElems` → `TransferLogElems`) + 제목 변경 + `CorrelationId` 필드 추가 + 머클 트리 갱신.
-- ✅ **btip-40.md**: 신규 — `LinkerTransfer` Solidity event 표준 정의 (`TransferLogAttrs`).
-- ✅ **btip-21.md**: setter 2개 제거 + `setRegistry` 단일화 + LinkerRegistry 동적 조회 패턴 통합 + 재진입·가스 항목 정정(MIN_CALLBACK_GAS 제거, griefing 위험 명시, LinkerAppLowGas 분기 추가).
-- ✅ **btip-26.md**: `LinkerAppLowGas` 표준 custom error 신규 + 권장 보호 패턴 NOTE.
-- ✅ **btip-23.md**: BTIP-19 Step 2~4 위임 매핑 명시 + Step 5~6 슈도코드 신설 + precompile 설명 제거 + setter 정합(`setPolicyContract` → `setRegistry`, LinkerRegistry 동적 조회).
-- ⚠️ **btip-22.md**: 본 세션 추가 NOTE 시도 후 사용자 롤백 + precompile 정보 추가.
-- ✅ **btip-24.md**: setter 정합(`setRegistry` 신설, onlyLinkerEndpoint를 LinkerRegistry 동적 조회로).
-- ✅ **BTIPS/README.md**: BTIP-25 제목 갱신 + BTIP-40 등재.
-- ❎ **btip-34.md**: 변경 *없음*(시도했던 두 블록 모두 삭제).
+**설계 결정 (코드 변경 없음)**:
+- ✅ `bpun-origin-payment-design.md` §15 신설 — `LinkerEndpoint.publish` 폐기 결정 + ccApp emitter 무신뢰 모델 + 권한 3분기 use case 가이드.
+- ✅ `btips-2pc-design.md` §5 정정 — correlationId 양 체인 통일(명시 id). §6 D-A/D-D 부분 폐기/historical 마킹.
+
+**BTIP 본문 변경**:
+- ✅ **btip-20.md**: 시퀀스 다이어그램 `wasDup = false` → markProcessed 정상 반환(중복이면 DuplicateProof로 revert) 표현 정정.
+- ✅ **btip-21.md**: 
+  - setter 2개(`setNullifierContract`/`setVerifierContract`) 제거 → `setRegistry` 단일화. LinkerRegistry 동적 조회 패턴 통합.
+  - 재진입·가스 항목 정정(MIN_CALLBACK_GAS 제거, griefing 위험 명시, `LinkerAppLowGas` 분기 추가).
+  - `DuplicateProof` 정의 제거(BTIP-24로 이동), 슈도코드는 markProcessed 단순 호출 + 자동 전파.
+  - `setRegistry` owner 모델 NOTE(Ownable, multisig는 별도 BTIP).
+  - 인터페이스 표기 정정(`IBTIPnn` 캐스팅, `IBTIP24.DuplicateProof`/`IBTIP26.LinkerAppLowGas` namespace).
+  - 순서 강제 표현 제거(트랜잭션 원자성 사실 박지 않음).
+- ✅ **btip-22.md**: ⚠️ 본 세션 추가 NOTE 시도 후 사용자 손수 롤백 + precompile 정보 추가. 사용자 결정 따라 변경 최소.
+- ✅ **btip-23.md**: 
+  - BTIP-19 Step 2~6 책임 명시(Step 2~4 → BTIP-22 위임, Step 5~6 직접 수행). 슈도코드 신설.
+  - precompile 설명 제거(BTIP-22가 호출).
+  - setter 정합 — `setPolicyContract` → `setRegistry` 단일화. `requires`에 btip37 추가.
+  - 인터페이스 표기 정정(`interface IBTIP23`, `IBTIP22(policy)` 캐스팅, Abstract `IBTIP23` 명시).
+- ✅ **btip-24.md**: 
+  - `setRegistry` 신설, onlyLinkerEndpoint를 LinkerRegistry 동적 조회로 명시.
+  - **markProcessed 내부 revert로 변경** — `returns (bool wasDup)` 제거. 중복이면 `DuplicateProof`로 직접 revert.
+  - `error DuplicateProof` 정의 신설(BTIP-21에서 이동, 발신 주체 원칙).
+  - 순서 강제 단락 삭제(EVM 원자성 사실 박지 않음).
+  - `requires`에 btip37 추가.
+  - 인터페이스 표기 정정(`interface IBTIP24`).
+- ✅ **btip-25.md**: 
+  - rename `TransferEventElems` → `TransferLogElems`. 제목 `TransferLogElems on BPrN`.
+  - `CorrelationId: bytes32` 필드 추가, 머클 트리 16-leaf null-padding 갱신.
+  - **이벤트 이름·자료구조명·selector 한 어휘로 통일** — selector = `sha256("TransferLogElems(...)")`.
+  - BTIP-40 cross-ref(양 체인 비대칭) 갱신.
+- ✅ **btip-26.md**: 
+  - `LinkerAppLowGas` 표준 custom error 신설(BTIP-21 →BTIP-26 위치, 발신 주체 원칙).
+  - "권장 패턴 — 명시적 가스 부족 신호" NOTE 추가.
+  - `interface IBTIP26`, `IBTIP26.LinkerAppLowGas` namespace 표기.
+- ✅ **btip-29/31/32/33/34/39.md**: BPrN-side `type BTIPnn interface` → `IBTIPnn`. btip-29 슈도코드 `IBTIP34(...)` 캐스팅 정정.
+- ✅ **btip-37.md**: `LINKER_CCS` role NOTE 제거 (L48-58). `interface IBTIP37`.
+- ✅ **btip-40.md** (신규): 
+  - `TransferLogAttrs` Solidity event 표준 정의(BPuN 이벤트 이름).
+  - Per-Event Tree index 매핑 (BTIP-35 evm 이벤트 attribute 구조).
+  - "Event Log" 통합 어휘 NOTE.
+  - BTIP-25와 대칭 표(필드 시퀀스만 공통, 이벤트 이름·selector는 각 체인 형식별 어휘로 비대칭).
+- ✅ **BTIPS/README.md**: BTIP-25 제목 갱신(`TransferLogElems on BPrN`), BTIP-40 등재(`TransferLogAttrs on BPuN`).
+
+**시도 후 정정·삭제**:
+- ❎ **btip-26.md**: 시도했던 "수신 측 권한 모델" IMPORTANT NOTE + "direct emit" 절 → use case 도메인 가정이라 *모두 삭제*. (BTIP-26은 일반 LinkerApp 인터페이스 스펙)
+- ❎ **btip-34.md**: 동일 두 블록 시도 후 *모두 삭제*. 결과적으로 변경 *없음*.
+
+**기타 task-contexts 변경**:
+- ✅ `task-contexts/btips.md`: 본 세션 누적 기록.
+- ✅ `task-contexts/btips-2pc-design.md`: §5/D-A/D-D 정정.
+- ✅ `task-contexts/bpun-origin-payment-design.md`: §6/§7/§11 폐기, §15 신설(`publish` 폐기 + ccApp 무신뢰 모델 + 권한 3분기 가이드).
+- ✅ `task-contexts/linker-v2.md`: §"2026-06-01 — 재동기화" 신설(audit 후 코드 ↔ BTIP 갭 추적표) + 누적 BTIP 변경의 코드 갭 §1.B 표에 통합.
+
+**메모리 저장 (재발 방지)**:
+- ✅ `feedback-design-before-code` — Linker V2는 설계 OPEN 항목을 코드보다 먼저.
+- ✅ `feedback-btip-scope-discipline` — BTIP 본문에 use case 도메인 용어 박지 말 것, 부재 항목에 부정형 의무 금지, 추상 용어는 데이터 모델 BTIP 선행.
+- ✅ `feedback-btip-writing-style` — Solidity/EVM 기본 동작 설명 금지(독자=스마트컨트랙트 개발자), 삭제·부재 항목에 사후 해명 박지 말 것.
 
 #### 다음 작업
 
-- **결제 이벤트 정의 BTIP** 신설 여부 결정 (선결 — 권한 3분기를 BTIP에 박으려는 경우).
-- **STC use case 미해결** (`bpun-origin-payment-design.md` §10-8): settle 행선지, PaymentBridge 분리, approve 동기화.
-- **2PC 코드 구현** + BPuN→BPrN 이벤트 Prover(`u2r`). 권한 모델 BTIP 명문화와 독립.
+본 세션의 *BTIP 명문화 사이클*은 종료. 다음 단계는 *코드 구현* 영역.
+
+1. **on-bpun 코드 갭 정리** (`task-contexts/linker-v2.md §1.B` 표 가이드):
+   - BTIP-21/23/24 setter 정리(`setRegistry` 단일화).
+   - `markProcessed` 시그니처 변경 + `DuplicateProof` 정의 위치 이동(IBTIP21 → IBTIP24).
+   - `LinkerTransfer` → `TransferLogAttrs` Solidity event 적용.
+   - 표기 규약(`IBTIPnn`) 적용.
+2. **on-bpun 2PC 구현** — `onResult`, `LinkerResult` event, `handleLinkerResult`, try/catch + `IBTIP26.LinkerAppLowGas` 분기.
+3. **on-bprn 2PC 구현** — `OnResult`, `HandleLinkerResult`, `LinkerResultElems`.
+4. **BPuN→BPrN 이벤트 Prover (`u2r`)** — end-to-end 결정적 미싱 피스.
+5. **잔존 설계 OPEN 항목** — `bpun-origin-payment-design.md` §10-3(주소 통일 + approve 동기화), §10-8(STC settle 행선지·PaymentBridge·approve).
 
 ### 2026-05-28 (BTIP-37 LINKER_CCS NOTE 추가 + Pay→publish 설계 논의)
 

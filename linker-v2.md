@@ -768,6 +768,7 @@ contracts/
 | **BTIP-40 `LinkerTransfer` Solidity event 표준**(`event LinkerTransfer(address indexed from, address indexed to, uint256 amount, bytes32 indexed correlationId, bytes memo)`) | 본문 미기재 — 2026-06-01 BTIP-40 신규 | 표준 event 정의 부재(현 BTIP26Dapp은 자체 `LinkerProofReceived` event 사용) | ❌ 미구현 — *결제 use case dApp이 채택 필요* |
 | **BTIP-26 `LinkerAppLowGas` 표준 custom error**(권장 보호 패턴 — dApp이 `revert LinkerAppLowGas()` 시 LinkerEndpoint가 catch에서 인식해 전체 revert) | 본문 미기재 — 2026-06-01 BTIP-26 명문화 | `LinkerAppLowGas` 정의/사용 부재. BTIP26Dapp.sol·LinkerEndpoint.sol 모두 미반영 | ❌ 미구현 (권장 옵션이므로 우선순위 낮음) |
 | **BTIP-37 LINKER_CCS NOTE 제거** | 본문 미기재 — 2026-06-01 BTIP-37 명문화 | `LinkerRegistry.sol`이 LINKER_* 상수 4개만 보유 — LINKER_CCS 미구현 상태로 일치 | ✅ |
+| **markProcessed 내부 revert**(`returns (bool wasDup)` 제거, 중복 시 `DuplicateProof`로 직접 revert) + `DuplicateProof` 정의 BTIP-21 → BTIP-24 이동 | 본문 미기재 — 2026-06-01 BTIP-24/21 명문화 | `IBTIP24.sol`이 `markProcessed returns (bool wasDup)` 패턴이고 `DuplicateProof`가 `IBTIP21.sol`에 정의돼 있을 것 | ❌ 미구현 (시그니처/에러 위치 둘 다 변경 필요) |
 | `IBTIP21` 시그니처 | 본문 2026-04-20 (1차) 기준 (`TxEventProof.mspids`/`block_number`/`event_log_root_proof` 등) | 일치 | ✅ |
 | `IBTIP21.onResult` 추가 (2PC) | 본문 미기재 | 부재 | ❌ 미구현 |
 | `scripts/beatoz/` (`deploy.ts`/`set-policy.ts`/`init-policy.ts`/`submit-proof.ts`/`cancel-event.ts`/`setup.sh`/`utils.ts`) + `send-op-tx.ts` | 본문 표는 `set-policy.ts`/`setup-localnet0.sh`로 기재 | `set-policy.ts`+`init-policy.ts` 둘 다 존재, `setup.sh`만 있고 `setup-localnet0.sh` 없음 | ⚠️ 스크립트명 갱신 (아래 본 절 §3) |
