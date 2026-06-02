@@ -331,6 +331,38 @@ BPrN 측 [BTIP-29](./btip-29.md)는 2026-05-28에 이미 `SetVerifierChaincodeID
 **잔존 미해결 (별도 작업)**:
 - ~~BTIP-23의 `setPolicyContract` setter는 BTIP-21의 `setRegistry` 패턴(LinkerRegistry 동적 조회)과 정합 안 됨.~~ — 같은 세션 내 처리(아래 BTIP-23/24 setter 정합 항목 참조).
 
+#### ✅ BTIPS 전체 — 인터페이스/문서 표기 규약 정정
+
+표기 규약 명문화: *문서로서 지칭*은 `BTIPnn`, *인터페이스로서 지칭*은 `IBTIPnn`. 일부 파일이 이미 따르고 있으나 본 세션 결과 전반 정합화.
+
+**규약 적용 기준**:
+- `[BTIPnn](./btip-nn.md)` — 문서 링크: 그대로.
+- `BTIPnn(LinkerXxx)` (괄호 안에 자료구조/컴포넌트명, 메소드 호출 없음) — 문서 지칭: 그대로.
+- 주석의 `// BTIPnn(LinkerXxx)` — 문서 지칭: 그대로.
+- `interface BTIPnn {` / `type BTIPnn interface {` — *인터페이스 정의*: `IBTIPnn`으로 정정.
+- 코드 블록 안 `BTIPnn(varname).method(...)` — *인터페이스 캐스팅*: `IBTIPnn`으로 정정.
+- prose 안 백틱 코드 `msg.sender == BTIPnn(LinkerXxx).method(...)` — *인터페이스 사용*: `IBTIPnn`으로 정정.
+
+**변경 파일**:
+
+| 파일 | 변경 |
+|---|---|
+| btip-21.md | 슈도코드 캐스팅 BTIP37/23/24/26 → IBTIP37/23/24/26 (10+ 곳) |
+| btip-23.md | `interface BTIP23` → `IBTIP23`, 슈도코드 IBTIP22/IBTIP37 캐스팅 정정 |
+| btip-24.md | `interface BTIP24` → `IBTIP24`, 슈도코드 IBTIP37 캐스팅 정정 |
+| btip-26.md | `interface BTIP26` → `IBTIP26`, prose 코드 인용 BTIP37 → IBTIP37 (2곳) |
+| btip-29.md | `type BTIP29 interface` → `IBTIP29`, 슈도코드 IBTIP34 캐스팅 (2곳) |
+| btip-31.md | `type BTIP31 interface` → `IBTIP31` |
+| btip-32.md | `type BTIP32 interface` → `IBTIP32` |
+| btip-33.md | `type BTIP33 interface` → `IBTIP33` |
+| btip-34.md | `type BTIP34 interface` → `IBTIP34` |
+| btip-37.md | `interface BTIP37` → `IBTIP37` |
+| btip-39.md | `type BTIP39 interface` → `IBTIP39` |
+
+**검증**: grep `^interface BTIP[0-9]\|^type BTIP[0-9]` 잔존 0건(DEPRECATED btip-10/11/12/13 제외), grep `BTIPnn(var).method` 캐스팅 잔존 0건.
+
+DEPRECATED 파일(btip-10/11/12/13)은 historical 기록으로 보존 — 변경 없음.
+
 #### ✅ btip-23.md / btip-24.md — setter 정합 (BTIP-21 패턴 적용)
 
 [BTIP-21](./btip-21.md)에서 도입한 *모든 컴포넌트가 LinkerRegistry 한 곳만 알면 됨* 패턴을 BTIP-23/24로 확장. 모듈별 주소 변경을 LinkerRegistry 매핑 갱신으로 처리하는 일관된 설계.
