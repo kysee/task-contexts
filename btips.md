@@ -189,6 +189,71 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 
 ## 세션별 완료 작업
 
+### 2026-06-02 (문서 리뷰 — 공통 정보 보강 + 용어 통일)
+
+> 본 세션은 *문서 리뷰* 중심. 구현 들어가기 전 공통 정보 보강 + 동의어 통일.
+
+#### ✅ btip-26.md / btip-34.md — 공통 정보 NOTE 보강 (표 형태)
+
+`handleLinkerEvent`/`HandleLinkerEvent`의 `indices` 파라미터 설명을 보강 + "이벤트 출처 정보" NOTE를 *블록 레벨* + *이벤트 레벨* 두 표로 정리. 양 BTIP 대칭 패턴.
+
+**btip-26.md** (BPrN-origin 수신):
+- `indices` 설명 보강 — BTIP-16 EventLog 구조에 따라 `gidx:0`~`gidx:3`은 모든 BPrN 이벤트 공통 Header 필드(`channel_id`/`chaincode_id`/`tx_id`/`selector`)에 고정 할당, `gidx:4`부터는 `elems`(이벤트별 정의). 아래 NOTE cross-ref.
+- "이벤트 출처 정보" NOTE: 표 형태로 재구성 — *블록 레벨 별도 파라미터*(`srcBlockNumber`/`srcTxIndex`) + *이벤트 레벨 고정 gidx*(0/1/2/3, `tx_id` 추가).
+
+**btip-34.md** (BPuN-origin 수신):
+- `indices` 설명 보강 — BTIP-35 `"evm"` 이벤트 구조 명시(`index:0` contractAddress, `index:1` topic.0 공통, 이후 가변).
+- "이벤트 출처 정보" NOTE: 표 형태로 재구성 — *블록 레벨*(`srcChainId`/`srcBlockNumber`/`srcTxIndex`) + *이벤트 레벨*(index 0/1). `srcChainId`가 별도 파라미터인 이유(ABCI 이벤트에 네트워크 식별 필드 없음) 인용 블록으로 분리.
+
+#### ✅ 용어 통일 — 발신/수신 (우선순위 1·2)
+
+문서 전체에서 *동의어 그룹* 조사 → 통일 추천 → 우선순위 1·2 일괄 적용.
+
+**우선순위 1 — 발신 컨트랙트/체인코드 통일**:
+- *원발신 컨트랙트* / *요청 발신자* / *요청 컨트랙트* / *BPuN 발신자* / *원발신 측* / *원발신 BPrN 채널* / *원발신 BPuN 컨트랙트* / *발신자(단독)* → 한국어 일관:
+  - BPuN: **"발신 컨트랙트"** (또는 *BPuN 발신 컨트랙트*)
+  - BPrN: **"발신 체인코드"** (또는 *BPrN 발신 체인코드*)
+  - 측면: **"발신 측"**
+- 적용: btip-21(7곳), btip-29(7곳), btip-34(3곳 + 표제 갱신).
+- 표제 *원발신 체인코드의 두 역할* → *발신 체인코드의 두 역할*.
+
+**우선순위 2 — 수신측 공백 통일**:
+- *수신측* → *수신 측*. 잔존 0건 (이미 모두 *수신 측* 또는 *수신 컨트랙트*/*수신 체인코드*로 박혀 있어 추가 변경 불요).
+
+**잔존 동의어 그룹 (다음 작업)**: ccApp → 앱 체인코드 / 암호학적으로 검증 / 되돌려 → 반송 / LinkerEndpoint Chaincode → 한국어 표기 / 애플리케이션 → 앱.
+
+#### ✅ 방향 표기 통일 — XXX-origin + 정방향 제거
+
+`BPrN → BPuN` / `BPrN -> BPuN` / `BPrN to BPuN` 등 화살표·전치사 변형을 모두 `BPrN-origin` / `BPuN-origin`으로 통일. 동시에 *정방향* 단어 제거(*-origin* 표기로 흐름이 명시되므로 불요).
+
+**변환 매핑**:
+- `BPrN → BPuN`·`BPrN -> BPuN`·`BPrN to BPuN` → `BPrN-origin`
+- `BPuN → BPrN`·`BPuN -> BPrN`·`BPuN to BPrN` → `BPuN-origin`
+- "X방향" 같은 후행 명사 제거 (방향이 *-origin*에 내포됨)
+- *정방향 요청* → *요청*
+- *정방향 증명* → *요청 증명* 또는 *이벤트 증명* (컨텍스트)
+- *정방향 이벤트* → *요청 이벤트*
+- *정방향을 처리한 핸들러* → *요청을 처리한 핸들러*
+
+**변경 파일**: btip-19, btip-21, btip-26, btip-28, btip-29, btip-31, btip-33, btip-34.
+
+**검증**: 잔존 *정방향* 0건, 잔존 `BPrN→BPuN`/`BPuN→BPrN` 화살표 표기 0건.
+
+#### ✅ 반송 → 리턴 통일 (LinkerResult 전달 행위)
+
+LinkerResult를 발신지로 돌려보내는 행위를 표현하는 *반송* 단어를 *리턴*으로 일괄 변경. *반환*(Solidity·Go 함수 return값 의미)은 그대로 유지.
+
+**변환 매핑**:
+- 반송 대상 → 리턴 대상
+- 반송 주소 → 리턴 주소
+- 반송된 결과 → 리턴된 결과
+- BPuN으로 반송 → BPuN으로 리턴
+- 결과 반송 → 결과 리턴
+
+**변경 파일**: btip-21, btip-26, btip-29, btip-34.
+
+**검증**: 잔존 *반송* 0건. *반환*은 함수 return 컨텍스트에 그대로 유지(btip-34: 8건, btip-29: 7건).
+
 ### 2026-06-01 (publish 폐기 결정 + BTIP-37 LINKER_CCS 제거 + BTIP-26 명문화)
 
 > 본 세션은 **설계 마감**을 우선한 정리 세션. `bpun-origin-payment-design.md`의 `LinkerEndpoint.publish` 제안을 폐기하고, 그 후속으로 BTIP-37 `LINKER_CCS` NOTE 제거 + BTIP-26에 수신 측 권한 모델·direct emit 모델 명문화. BPrN-origin 대칭(BTIP-34)은 다음 작업.
