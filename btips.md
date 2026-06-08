@@ -364,7 +364,7 @@ BPrN 측 [BTIP-29](./btip-29.md)는 2026-05-28에 이미 `SetVerifierChaincodeID
 - 각 체인의 직렬화 형식 어휘(`LogElems` = Fabric EventLog.elems, `LogAttrs` = ABCI Event attributes)를 *이벤트 이름에 그대로* 반영. 두 체인의 자료구조 표현이 본질적으로 다르므로 이벤트 이름도 비대칭이 자연.
 - 공통 어휘는 *Event Log*(BTIP-40 NOTE). 이벤트 이름 prefix `TransferLog` 공통, 접미사로 형식 구별.
 
-#### ✅ btip-21.md / btip-26.md — 재진입·가스 항목 정정 + LinkerAppLowGas 권장 패턴
+#### ✅ btip-21.md / btip-26.md — 재진입·가스 항목 정정 + ErrAppLowGas 권장 패턴
 
 기존 BTIP-21 "재진입·가스" 항목이 *부당 REJECTED 영구 기록*을 완전 방어하지 못함을 토론으로 확인. 해당 항목이 *거짓 안전감*만 주는 상태였음. 정정 방향:
 
@@ -377,19 +377,19 @@ BPrN 측 [BTIP-29](./btip-29.md)는 2026-05-28에 이미 `SetVerifierChaincodeID
 **정정 결정** (사용자 redirect):
 - BTIP-21에서 `MIN_CALLBACK_GAS` + `CATCH_RESERVE` + 사전 require 패턴 *제거*. 부당 REJECTED를 완전히 막지 못하면서 거짓 안전감만 줌.
 - 대신 *부당 REJECTED 위험을 솔직히 명시* — 자금 안전·서비스 가용성 분리, EVM 한계, 호출자·dApp 책임 영역 분명히.
-- dApp 협조 패턴으로 *명시적 가스 부족*은 완화 가능 — `LinkerAppLowGas` custom error를 BTIP-26 표준으로 도입.
+- dApp 협조 패턴으로 *명시적 가스 부족*은 완화 가능 — `ErrAppLowGas` custom error를 BTIP-26 표준으로 도입.
 
 **btip-21.md 변경**:
 - "재진입·가스" 단일 항목 → "재진입 가드" + "가스 처리와 한계" 두 항목으로 분리.
 - `MIN_CALLBACK_GAS`/`CATCH_RESERVE`/사전 require 모두 제거. EIP-150 63/64 룰이 catch 가스를 자연 보장한다는 사실 명시.
 - 부당 REJECTED griefing 위험 솔직히 박음. dApp 협조 패턴(BTIP-26) cross-ref.
-- onProof 슈도코드에 `except (BTIP26.LinkerAppLowGas): revert BTIP26.LinkerAppLowGas` 분기 추가 — 표준 가스 부족 신호 인식 시 *같은 에러를 그대로 전파*해 전체 revert(Nullifier 미등록).
-- `error LinkerAppLowGas()` *BTIP-26에 단일 정의* — 이름의 의미 주체가 LinkerApp(=dApp)이므로 LinkerApp 인터페이스 BTIP에 정의가 자연. BTIP-21은 catch에서 `BTIP26.LinkerAppLowGas` selector 인식 후 같은 에러로 전파(import).
+- onProof 슈도코드에 `except (BTIP26.ErrAppLowGas): revert BTIP26.ErrAppLowGas` 분기 추가 — 표준 가스 부족 신호 인식 시 *같은 에러를 그대로 전파*해 전체 revert(Nullifier 미등록).
+- `error ErrAppLowGas()` *BTIP-26에 단일 정의* — 이름의 의미 주체가 LinkerApp(=dApp)이므로 LinkerApp 인터페이스 BTIP에 정의가 자연. BTIP-21은 catch에서 `BTIP26.ErrAppLowGas` selector 인식 후 같은 에러로 전파(import).
 
 **btip-26.md 변경**:
-- interface에 `error LinkerAppLowGas()` 표준 custom error 정의.
+- interface에 `error ErrAppLowGas()` 표준 custom error 정의.
 - "권장 패턴 — 명시적 가스 부족 신호" NOTE 추가:
-  - dApp이 함수 시작에서 `if (gasleft() < MY_MIN_REQUIRED_GAS) revert LinkerAppLowGas();` 패턴 권장 (강제 아님).
+  - dApp이 함수 시작에서 `if (gasleft() < MY_MIN_REQUIRED_GAS) revert ErrAppLowGas();` 패턴 권장 (강제 아님).
   - LinkerEndpoint가 catch에서 이 신호 인식 → 전체 revert (Nullifier 미등록, 재시도 가능).
   - 그 외 revert(다른 custom error, Error string, Panic, EVM 암묵적 OOG)는 모두 일반 REJECTED.
   - 한계 솔직히: EVM 암묵적 OOG는 보호 못 함. *명시적* gas 부족 grief 차단에 한정.
@@ -464,7 +464,7 @@ DEPRECATED 파일(btip-10/11/12/13)은 historical 기록으로 보존 — 변경
   - 본문 설명 정리(중복 처리 = BTIP-24 revert 자동 전파).
 
 **근거**:
-- `LinkerAppLowGas`(BTIP-26 발신 주체)와 동일 패턴 — **발신 주체가 에러 정의 + 직접 revert, 호출자는 자동 전파**.
+- `ErrAppLowGas`(BTIP-26 발신 주체)와 동일 패턴 — **발신 주체가 에러 정의 + 직접 revert, 호출자는 자동 전파**.
 - 함수명(`markProcessed`)과 동작이 일치 — 정상 반환이면 마킹 성공, revert면 중복.
 - 호출자 코드 간소화 — 리턴값 체크 분기 제거.
 
@@ -501,10 +501,10 @@ DEPRECATED 파일(btip-10/11/12/13)은 historical 기록으로 보존 — 변경
 - ✅ **btip-20.md**: 시퀀스 다이어그램 `wasDup = false` → markProcessed 정상 반환(중복이면 DuplicateProof로 revert) 표현 정정.
 - ✅ **btip-21.md**: 
   - setter 2개(`setNullifierContract`/`setVerifierContract`) 제거 → `setRegistry` 단일화. LinkerRegistry 동적 조회 패턴 통합.
-  - 재진입·가스 항목 정정(MIN_CALLBACK_GAS 제거, griefing 위험 명시, `LinkerAppLowGas` 분기 추가).
+  - 재진입·가스 항목 정정(MIN_CALLBACK_GAS 제거, griefing 위험 명시, `ErrAppLowGas` 분기 추가).
   - `DuplicateProof` 정의 제거(BTIP-24로 이동), 슈도코드는 markProcessed 단순 호출 + 자동 전파.
   - `setRegistry` owner 모델 NOTE(Ownable, multisig는 별도 BTIP).
-  - 인터페이스 표기 정정(`IBTIPnn` 캐스팅, `IBTIP24.DuplicateProof`/`IBTIP26.LinkerAppLowGas` namespace).
+  - 인터페이스 표기 정정(`IBTIPnn` 캐스팅, `IBTIP24.DuplicateProof`/`IBTIP26.ErrAppLowGas` namespace).
   - 순서 강제 표현 제거(트랜잭션 원자성 사실 박지 않음).
 - ✅ **btip-22.md**: ⚠️ 본 세션 추가 NOTE 시도 후 사용자 손수 롤백 + precompile 정보 추가. 사용자 결정 따라 변경 최소.
 - ✅ **btip-23.md**: 
@@ -525,9 +525,9 @@ DEPRECATED 파일(btip-10/11/12/13)은 historical 기록으로 보존 — 변경
   - **이벤트 이름·자료구조명·selector 한 어휘로 통일** — selector = `sha256("TransferLogElems(...)")`.
   - BTIP-40 cross-ref(양 체인 비대칭) 갱신.
 - ✅ **btip-26.md**: 
-  - `LinkerAppLowGas` 표준 custom error 신설(BTIP-21 →BTIP-26 위치, 발신 주체 원칙).
+  - `ErrAppLowGas` 표준 custom error 신설(BTIP-21 →BTIP-26 위치, 발신 주체 원칙).
   - "권장 패턴 — 명시적 가스 부족 신호" NOTE 추가.
-  - `interface IBTIP26`, `IBTIP26.LinkerAppLowGas` namespace 표기.
+  - `interface IBTIP26`, `IBTIP26.ErrAppLowGas` namespace 표기.
 - ✅ **btip-29/31/32/33/34/39.md**: BPrN-side `type BTIPnn interface` → `IBTIPnn`. btip-29 슈도코드 `IBTIP34(...)` 캐스팅 정정.
 - ✅ **btip-37.md**: `LINKER_CCS` role NOTE 제거 (L48-58). `interface IBTIP37`.
 - ✅ **btip-40.md** (신규): 
@@ -561,7 +561,7 @@ DEPRECATED 파일(btip-10/11/12/13)은 historical 기록으로 보존 — 변경
    - `markProcessed` 시그니처 변경 + `DuplicateProof` 정의 위치 이동(IBTIP21 → IBTIP24).
    - `LinkerTransfer` → `TransferLogAttrs` Solidity event 적용.
    - 표기 규약(`IBTIPnn`) 적용.
-2. **on-bpun 2PC 구현** — `onResult`, `LinkerResult` event, `handleLinkerResult`, try/catch + `IBTIP26.LinkerAppLowGas` 분기.
+2. **on-bpun 2PC 구현** — `onResult`, `LinkerResult` event, `handleLinkerResult`, try/catch + `IBTIP26.ErrAppLowGas` 분기.
 3. **on-bprn 2PC 구현** — `OnResult`, `HandleLinkerResult`, `LinkerResultElems`.
 4. **BPuN→BPrN 이벤트 Prover (`u2r`)** — end-to-end 결정적 미싱 피스.
 5. **잔존 설계 OPEN 항목** — `bpun-origin-payment-design.md` §10-3(주소 통일 + approve 동기화), §10-8(STC settle 행선지·PaymentBridge·approve).
