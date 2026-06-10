@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-28
+last_updated: 2026-06-10
 related: ./btips.md
 ---
 
@@ -54,7 +54,7 @@ related: ./btips.md
 - **의도/배경**: 사용자가 "Hard revert는 잘못된 증명이니 재제출하면 됨, 배제 가능"이라 했으나 — **전제가 부정확**. Hard revert는 ①증명 무효(재제출로 해결) ②**유효 증명 + dApp revert**(재제출해도 또 revert, 해결 안 됨)의 두 경우가 있음. ②를 위해 LinkerEndpoint가 dApp revert를 캐치해 결정적 REJECTED로 확정해야 함.
 - **반드시 LinkerEndpoint(신뢰 컴포넌트)가 강제** — dApp(비신뢰)의 약속에 의존하면 깨짐.
 - `markProcessed`(Nullifier)는 try 이전 → dApp revert와 무관하게 커밋(거부도 소비, 재제출 차단).
-- **부수 주의**: 일시적 OOG가 영구 REJECTED로 둔갑하지 않도록 `MIN_CALLBACK_GAS` 하한 + nonReentrant 가드.
+- **부수 주의**: 일시적 OOG가 영구 REJECTED로 둔갑하는 문제는 EVM 한계상 완전 방어 불가 — `MIN_CALLBACK_GAS` 하한은 2026-06-01 폐기(거짓 안전감). 대신 dApp 권장 패턴 `IBTIP26.ErrAppLowGas`(명시적 가스 부족 신호 → LinkerEndpoint가 전체 revert, Nullifier 미등록, 재시도 가능)로 *명시적* grief만 완화. nonReentrant 가드는 유지.
 
 ### 결정 4 — 타임아웃 없음 (결과-주도 완결)
 - **무엇**: 에스크로에 시간 제한 없음. ACCEPTED/REJECTED 결과 증명이 도착해야만 settle/refund.
@@ -63,24 +63,28 @@ related: ./btips.md
 - **유일한 잔여 리스크**: BPuN이 결과 산출 전 영구 정지/포크 이탈 시 동결 → 결정 7(운영 정책)로 통제.
 - **추가 이점**: finalize 제출이 자연 인센티브로 정해짐(아래) + "한 번 잠그면 BPuN 결과만이 해제"라는 깔끔한 불변식(대기 중 일방 취소 불가 → front-run 방지).
 
-### 결정 5 — correlationId = 발신자가 정한 명시 id (양 체인 통일)
+### 결정 5 — correlationId: BPrN-origin = `tx_event_root` 강제 / BPuN-origin = 명시 id (방향별 비대칭)
 
-> **2026-06-01 정정**: 본 결정의 *최초 형태*(BPrN-origin은 `tx_event_root` 내재값 / BPuN-origin은 명시 id, 방향별 비대칭)가 §6 D-A에 정당화되어 있었으나, BTIP-25/40 작업에서 *양 체인 모두 명시 id로 통일*로 재결정됐다(BTIP-25 `TransferLogElems.CorrelationId: bytes32`, BTIP-40 `LinkerTransfer(...,bytes32 indexed correlationId,...)`). 본 절은 *현재 결정*만 기술하고, 폐기된 비대칭 모델은 §6 D-A에 historical로 보존.
+> **2026-06-01 정정**: 본 결정의 *최초 형태*(BPrN-origin은 `tx_event_root` 내재값 / BPuN-origin은 명시 id, 방향별 비대칭)가 §6 D-A에 정당화되어 있었으나, BTIP-25/40 작업에서 *양 체인 모두 명시 id로 통일*로 재결정됐었다.
+>
+> **2026-06-10 재정정**: 2026-06-05~10 사용자 직접 리뷰에서 **방향별 비대칭으로 회귀**. 단 최초 형태와 달리 BPrN-origin도 *명시 필드*(BTIP-25 `CorrelationId`, gidx:4)는 유지하며, 그 **값을 무조건 `tx_event_root`로 강제**한다(BTIP-25/21/34). 본 절은 현재 결정을 기술한다.
 
-- **무엇**: 에스크로 키 = LinkerResult.correlationId = **발신자(dApp/ccApp)가 자기 컨트랙트 안에서 유일하도록 정한 명시 식별자**(예: 단조 증가 nonce). 양 체인 동일.
+- **무엇**: 보류(잠금)상태 키 = `LinkerResult.correlationId`.
+  - **BPrN-origin**: 발신 ccApp이 명시 필드(BTIP-25 `TransferLogElems.CorrelationId`, gidx:4)에 싣되, 값은 **무조건 요청의 `tx_event_root`** (BTIP-25 정의 + BTIP-21 Rational + BTIP-34 강제). [BTIP-24](BTIPS) Nullifier 기준값과 동일하므로 요청-결과 양단을 모호함 없이 연결.
+  - **BPuN-origin**: **발신 dApp이 자기 컨트랙트 안에서 유일하도록 정한 명시 id**(예: 단조 증가 nonce. 오사용 예방 차원에서 전역 유일 생성 권장 — BTIP-26). BTIP-40 `TransferLogAttrs(bytes32 indexed correlationId, ...)`.
 - **의도/검증**:
-  - **유일성**: 컨트랙트 안에서만 유일하면 충분 — 결과는 발신자 컨트랙트로만 라우팅되므로 *그 컨트랙트의 매칭 네임스페이스* 안에서만 사용된다. 전역 유일성 불요.
-  - **lock 시점 결정 가능** ✅: 발신자가 자기 상태(nonce 등)로 결정하므로 항상 가용.
-  - **node-format 결합 회피** ✅: BPuN(EVM) 발신자가 *내재값*(`tx_event_root` 또는 `event_attrs_root`)을 lock 시점에 계산하려면 노드의 evmLogsToEvent 직렬화 포맷에 강결합 — 그 결합을 양 체인 모두 회피.
-  - **Nullifier와 분리** ✅: Nullifier는 여전히 `tx_event_root`(BPrN) / `event_attrs_root`(BPuN) 기준 (BTIP24/33) — *재생 방지*. correlationId는 *매칭* — 의미가 다르므로 분리.
-- **fire-and-forget**: correlationId 필드는 *2PC를 쓸 때* 박는 발신자 옵션. fire-and-forget이면 미사용(BTIP-29의 `CorrelationIndex<0` 신호 또는 발신자가 correlationId 미설정).
-- **양 체인 발신 이벤트에 명시 필드**: BPrN — BTIP-25 `TransferLogElems.CorrelationId: bytes32`. BPuN — BTIP-40 `event LinkerTransfer(..., bytes32 indexed correlationId, ...)`.
+  - **lock 시점 결정 가능** ✅: BPrN ccApp은 `tx_event_root`를 BTIP16 규칙으로 emit 시점에 직접 계산 가능(입력이 모두 실행 시점에 가용, 노드 포맷 결합 없음). BPuN dApp은 자기 상태(nonce)로 결정.
+  - **node-format 결합 회피** (BPuN에만 해당) ✅: BPuN(EVM) 발신자가 내재값(`event_attrs_root`)을 lock 시점에 계산하려면 노드의 evmLogsToEvent 직렬화 포맷에 강결합 — 명시 id로 회피. *BPrN 측은 이 결합 자체가 없으므로 내재값 강제가 더 단순* — 이것이 2026-06-10 비대칭 회귀의 근거.
+  - **Nullifier와 분리** ✅: Nullifier는 여전히 `tx_event_root`(BPrN) / `event_attrs_root`(BPuN) 기준 (BTIP24/33) — *재생 방지*. correlationId는 *매칭*. (BPrN-origin은 두 값이 결과적으로 동일하나 의미는 분리 유지.)
+- **fire-and-forget**: BPuN-origin에서 correlationId 미포함 가능 — BTIP-29의 `CorrelationIndex<0` 신호로 결과증명 미발행.
 
 ### 결정 6 — onProof vs OnResult 분리
 - **무엇**: 정방향 증명은 BPuN `btip-21.onProof`가 소비(LinkerResult emit). LinkerResult 증명은 BPrN `btip-29.OnResult`가 소비(→ btip-34.HandleLinkerResult).
 - **방향 정리**: 두 증명은 **서로 다른 체인**에서 소비됨. 한 onProof가 둘 다 처리하지 않음.
-- **OnResult를 분리하는 의도(보안)**: 일반 OnProof는 임의 BPuN 이벤트를 임의 체인코드에 전달. 그러나 LinkerResult는 **반드시 공식 BPuN LinkerEndpoint가 emit**한 것이어야 함(아니면 악성 컨트랙트가 가짜 LinkerResult로 남의 에스크로를 settle/refund). OnResult는 "소스 컨트랙트(index 0) == 공식 엔드포인트(btip-38 레지스트리 조회)" 추가 검증을 강제 → 별도 메소드가 정당.
-- 대상은 제출자가 지정하지 않고 검증된 LinkerResult의 `originChaincodeId`에서 추출 → 결과는 발신 체인코드로만 전달.
+- **OnResult를 분리하는 의도(보안)**: 일반 OnProof는 임의 BPuN 이벤트를 임의 체인코드에 전달. 그러나 LinkerResult는 **반드시 공식 BPuN LinkerEndpoint가 emit**한 것이어야 함(아니면 악성 컨트랙트가 가짜 LinkerResult로 남의 에스크로를 settle/refund). OnResult는 "소스 컨트랙트(index 0) == 공식 엔드포인트(레지스트리 조회)" 추가 검증을 강제 → 별도 메소드가 정당.
+- ~~대상은 제출자가 지정하지 않고 검증된 LinkerResult의 `originChaincodeId`에서 추출 → 결과는 발신 체인코드로만 전달.~~
+
+> **2026-06-09 정정 (라우팅 방식 변경)**: `OriginContract`/`originChaincodeId` 기반 자동 라우팅을 폐기하고, `onResult(payload, handlerDApp)`(BTIP-21) / `OnResult(ctx, payload, handlerCcId)`(BTIP-29)처럼 **제출자가 결과를 전달받을 handler를 명시 지정**한다. *"제출된 증명을 어떤 handler가 처리해야 하는가는 비즈니스 구현 영역의 책임"* 원칙. 이에 따라 `LinkerResult`는 `(correlationId, handlerDApp, status)` 3필드, `LinkerResultElems`는 `(CorrelationId, HandlerCcId, Status)` 3 elems로 단순화되고 Origin* 필드는 제거됨. 출처 검증(소스==공식 엔드포인트)과 수신 앱의 의도-핸들러 대조(#5a)는 유지 — 결과 오배송 방어의 무게중심이 프로토콜 라우팅에서 *수신 앱의 매칭·권한 검증*으로 이동(BTIP-34 NOTE: 상태 변경은 검증된 `contractAddress`의 권한·상태에 한정).
 
 ### 결정 7 — 제출 주체 + 운영 정책
 - **제출 인센티브**: ACCEPTED는 지급받을 **판매자**가, REJECTED는 환불받을 **구매자**가 자연스럽게 제출. permissionless.
@@ -101,7 +105,7 @@ related: ./btips.md
 | bool `false` 리턴 후 부작용 커밋 → 이중 결과 | revert-only (결정 2) |
 | `true` 리턴했으나 미이행 | dApp 의무로 명시(평범한 정확성 신뢰) |
 | 유효 증명 + dApp revert를 "잘못된 증명"으로 오인 | try/catch로 결정적 REJECTED (결정 3) |
-| 일시적 OOG → 영구 REJECTED 둔갑 | MIN_CALLBACK_GAS 하한 |
+| 일시적 OOG → 영구 REJECTED 둔갑 | `ErrAppLowGas` 권장 패턴 (2026-06-01, MIN_CALLBACK_GAS 폐기 — 명시적 신호만 방어, 암묵적 OOG는 한계를 스펙에 명시) |
 | dApp 재진입 | nonReentrant 가드 |
 | 타임아웃 시 타임락 순서 레이스(이중 결과) | 타임아웃 제거 (결정 4) |
 | 클론 컨트랙트를 진본으로 오인 | LinkerRegistry + msg.sender/caller 검증 (결정 1, 6) |
@@ -124,36 +128,38 @@ BPrN-origin의 거울상(결제·요청이 BPuN에서 발생 → BPrN 앱 체인
 
 ### 핵심 결정과 의도
 
-**D-A. correlationId 출처의 방향별 비대칭** (historical — 2026-06-01 폐기)
+**D-A. correlationId 출처의 방향별 비대칭** (2026-06-10 재채택)
 
-> **2026-06-01 정정**: 본 방향별 비대칭은 폐기. 양 체인 모두 *발신자 정한 명시 id로 통일*(§5 갱신본 참조). 아래는 폐기된 비대칭 모델의 *historical 기록* — 폐기 근거는 §5의 *node-format 결합 회피* 항목으로 통합됨(이제 양 체인 모두 동일 이유로 명시 id 사용).
+> **2026-06-01 정정**: 본 방향별 비대칭은 폐기. 양 체인 모두 *발신자 정한 명시 id로 통일*.
+>
+> **2026-06-10 재정정**: 사용자 직접 리뷰로 **비대칭 모델 재채택** (§5 갱신본이 현행). BPrN-origin = `tx_event_root` 강제(단, 명시 필드 CorrelationId에 실어 보냄), BPuN-origin = 명시 id. 아래 원래 논거 중 *node-format 결합*은 BPuN에만 적용된다는 점이 재확인된 셈.
 
-- ~~BPrN-origin: `tx_event_root`(**내재값** — EP가 증명에서 공짜로 가짐, 발신 체인코드가 BTIP16으로 계산 가능). 유지.~~ → **명시 id로 변경**
+- BPrN-origin: `tx_event_root`(**내재값** — EP가 증명에서 공짜로 가짐, 발신 체인코드가 BTIP16으로 계산 가능). ~~→ 명시 id로 변경(2026-06-01)~~ → **2026-06-10 `tx_event_root` 강제로 회귀** (명시 필드 BTIP-25 `CorrelationId`에 싣는 형태)
 - BPuN-origin: **발신 컨트랙트가 정한 명시 id**(nonce). 이유 — BPuN(EVM) 발신 컨트랙트가 event_attrs_root를 lock 시점에 계산하려면 beatoz-go `evmLogsToEvent` 인코딩(소문자 주소/대문자 topic/10진수 blockNumber/data 생략/순서)에 **강결합**되어 노드 포맷 변경 시 모든 컨트랙트가 깨짐. 그 결합을 피하려 명시 id 채택. → **양 체인에 동일 근거로 적용, 비대칭 폐기.**
 - **검증 완료**: `evmLogsToEvent`([ctrler.go:339](~/go/src/github.com/beatoz/beatoz-go/ctrlers/vm/evm/ctrler.go)) 확인 — contractAddress=`address(this)`, topics/data=컨트랙트 생성, blockNumber=`block.number`(=l.BlockNumber), removed=항상 `"false"`(BFT 즉시완결+emit시점). 즉 계산은 *가능*하나 결합 위험 때문에 명시 id 선택.
 - correlationId(매칭)와 Nullifier(재생방지)는 **분리** — Nullifier는 여전히 tx_event_root/event_attrs_root 기준. *(이 명제는 양 체인 통일 후에도 유지)*
 
 **D-B. 거부 표현의 방향별 비대칭** (EVM vs HLF 본질 차이)
 - BPuN dApp(btip-26): 거부=`revert` → EVM이 자동 롤백 → "거부=무부작용" 강제.
-- BPrN 앱 체인코드(btip-34): **Fabric은 자동 롤백 없음.** InvokeChaincode가 에러 반환해도 그 전 PutState는 커밋됨. 게다가 contractapi는 `err != nil`이면 **리턴값(correlationId)을 버림** → 거부를 err로 표현하면 correlationId 유실. 따라서 거부=`accepted=false` **정상 리턴**(tx 커밋). → **CAUTION: `accepted=false` 반환 전 어떤 PutState도 금지** (안 그러면 "거부했는데 상태 변경은 반영" 불일치). `error`는 correlationId조차 못 주는 하드 실패 전용(tx 전체 실패→재시도).
+- BPrN 앱 체인코드(btip-34): **Fabric은 자동 롤백 없음.** InvokeChaincode가 에러 반환해도 그 전 PutState는 커밋됨. 게다가 contractapi는 `err != nil`이면 **리턴값(correlationId)을 버림** → 거부를 err로 표현하면 correlationId 유실. 따라서 거부=`Status=false` **정상 리턴**(tx 커밋). `error`는 correlationId조차 못 주는 하드 실패 전용(tx 전체 실패→재시도). *(2026-06-09 조정: `Accepted` → `Status` 리네임. CAUTION은 "거부 전 PutState 금지"에서 "거부 의도 시 선행 PutState의 수동 롤백 여부를 면밀히 검토"로 완화 — btip-34.)*
 
 **D-C. HandleLinkerEvent가 index를 반환** (btip-34)
 - `HandleLinkerEvent(...) (LinkerResultRef, error)`, `LinkerResultRef{ CorrelationIndex int64; Accepted bool }`.
 - 앱 체인코드는 자기 스킴을 알므로 correlationId가 위치한 **인덱스(gidx)** 를 반환. EP는 **검증·확보한 values에서 그 인덱스 값**을 correlationId로 사용 → 앱 체인코드가 값을 위조 못 함(다른 escrow로 라우팅 불가, 기껏 self-griefing).
 - `CorrelationIndex < 0` → fire-and-forget(LinkerResultElems 미발행). 이게 #2의 opt-in 신호.
 
-**D-D. fire-and-forget 처리의 방향별 비대칭** (historical — 2026-06-01 부분 폐기)
+**D-D. fire-and-forget 처리의 방향별 비대칭**
 
-> **2026-06-01 정정**: correlationId가 양 체인 통일(명시 id, §5)됐으므로 *내재값/명시값 차이에서 비롯된 비대칭 정당화*는 폐기. 단 *거부 표현*(EVM revert vs Fabric `accepted=false`)의 비대칭(D-B)은 그대로 유지되므로 fire-and-forget 처리 방식의 비대칭도 일부 남는다.
+> **2026-06-01 정정**: 비대칭의 본질은 *거부 표현(revert vs 리턴값)* 차이이지 correlationId 출처가 아님이 확인됨.
+>
+> **2026-06-09 정정**: `ProofVerifiedEventElems` 제거 — fire-and-forget(`CorrelationIndex<0`)이면 BPrN 측도 **이벤트를 발행하지 않음**.
 
-- #1(btip-21): ~~correlationId가 내재(tx_event_root)~~ + 거부가 revert(신호 못 실음) → **always-emit**(fire-and-forget도 안 쓰이는 LinkerResult 발행, 무해). *이유: revert는 리턴값으로 신호를 실을 수 없음. correlationId 출처와 무관.*
-- #2(btip-29): ~~correlationId가 명시(비내재)~~ + 거부가 리턴값 → **opt-in**(CorrelationIndex<0이면 ProofVerifiedEventElems, ≥0이면 LinkerResultElems). *이유: Fabric은 리턴값으로 신호 가능. correlationId 출처와 무관.*
+- #1(btip-21): 거부가 revert(신호 못 실음) → **always-emit**(fire-and-forget도 안 쓰이는 LinkerResult 발행, 무해). *이유: revert는 리턴값으로 신호를 실을 수 없음.*
+- #2(btip-29): 거부가 리턴값 → **opt-in**(CorrelationIndex≥0이면 LinkerResultElems 발행, <0이면 미발행). *이유: Fabric은 리턴값으로 신호 가능.*
 
-→ 비대칭의 본질은 *거부 표현(revert vs 리턴값)* 차이이지 correlationId 출처가 아님. 양 체인 통일 후에도 fire-and-forget 처리는 D-B 차이로 비대칭이 유지된다.
+**D-E. 이벤트 정의 네이밍**: BPuN쪽은 Solidity 이벤트 `LinkerResult`, BPrN쪽은 EventLog elems 정의라 `LinkerResultElems`(`...Elems` 관례 — 현행 `TransferLogElems`. `ProofVerifiedEventElems`는 2026-06-09 제거).
 
-**D-E. 이벤트 정의 네이밍**: BPuN쪽은 Solidity 이벤트 `LinkerResult`, BPrN쪽은 EventLog elems 정의라 `LinkerResultElems`(TransferEventElems/ProofVerifiedEventElems 관례).
-
-**D-F. `chaincodeID` → `appChaincodeID` 리네임** (btip-29/33): 이벤트를 실제 처리하는 앱 체인코드를 linker 체인코드 세트와 구분. (verifier/nullifier setter의 chaincodeID는 endpointID 등으로 별도 처리)
+**D-F. `chaincodeID` → `appChaincodeID` 리네임** (btip-29/33): 이벤트를 실제 처리하는 앱 체인코드를 linker 체인코드 세트와 구분. *(2026-06-09 재리네임: `appChaincodeID` → `handlerCcId`(라우팅 파라미터) / `ccAppId`(btip-33 Nullifier 계산). BPuN 측 `targetDApp` → `handlerDApp`.)*
 
 ### 구현 결과 (파일, 2026-05-22)
 - **btip-29**: OnProof가 HandleLinkerEvent 반환(LinkerResultRef) 수신 → `LinkerResultElems`(2PC) 또는 `ProofVerifiedEventElems`(fire-and-forget) 발행. `LinkerResultElems` EventLog 정의. `appChaincodeID` 리네임.
@@ -239,8 +245,8 @@ setContract(bytes32 chainId, bytes32 role, address contractAddr)
 - **벡터 2 — 공식 엔드포인트 악용**(정방향 증명을 "항상 거부" 핸들러에 흘림): 공식 엔드포인트가 정당하게 `LinkerResult(correlationId, REJECTED, dApp=evil)`를 emit → 출처 검증 통과 → 잘못된 refund. **이게 #5a가 막는 부분.** 단순 오환불이 아니라 **정상 거래에 대한 griefing/DoS**(구매자는 서비스 못 받고 판매자는 미수금).
 
 **해결**: 결과 콜백이 **핸들러 식별자**를 싣게 함.
-- `handleLinkerResult(correlationId, handlerCcApp, accepted)`(btip-26) / `HandleLinkerResult(ctx, correlationId, handlerDApp, accepted)`(btip-34).
-- `onResult`는 `LinkerResultElems.appChaincodeID`(gidx:8), `OnResult`는 `LinkerResult.dApp`을 꺼내 콜백으로 포워딩. **이벤트 정의는 이미 핸들러 필드를 보유 → 정의 변경 0, 콜백 인자+포워딩만.**
+- `handleLinkerResult(correlationId, handleCcId, status)`(btip-26) / `HandleLinkerResult(ctx, correlationId, handlerDApp, status)`(btip-34). *(2026-06-09 리네임 반영)*
+- `onResult`는 `LinkerResultElems.HandlerCcId`(gidx:5), `OnResult`는 `LinkerResult.handlerDApp`을 꺼내 콜백으로 포워딩. **이벤트 정의가 핸들러 필드를 보유 → 콜백 인자+포워딩만.**
 - **신뢰성**: 핸들러 필드는 공식 엔드포인트가 "자기가 호출한 대상"을 정직히 기록 + 증명·출처검증으로 위조 불가. → `handlerDApp == 의도한 dApp`인 결과를 얻으려면 *실제로* 그 dApp에 라우팅해야 하고, 그건 진짜 판정.
 - **앱 책임(분담)**: 프로토콜은 "누가 판정했나"를 위조불가하게 공급. "누가 판정*해야* 하나(intended handler)"는 **앱이 lock 시점에 기록**하고 콜백에서 비교(불일치 시 무시). 이는 origin의 "의도한 핸들러" 설정의 거울상이며, 자금 risk를 지는 쪽이 per-instance로 소유 — LinkerRegistry는 비즈니스 dApp을 담지 않으므로 레지스트리로 대체 불가.
 - **누가 intended handler를 결정하는가**: 본 #5a는 *기록 의무*만 정의. *누가 그 값을 정하는가*는 use case에 따라 다름 — dApp-orchestrated는 dApp이 사전 설정(immutable/owner-set), user-driven payment는 사용자 입력(Web2 결제 패턴, 1:N 시나리오에 필수). 1:N에서 사전 등록 모델이 깨지는 이유·user-input phishing 재해석은 `./bpun-origin-payment-design.md` §12.3 참조.

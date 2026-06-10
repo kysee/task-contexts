@@ -113,7 +113,7 @@ dApp이 X를 직접 emit하지 않고 **`LinkerEndpoint.Pay(payer, payee, amount
 5. **Nullifier로 재생 방지 → 이중 차감 방지**: existing BTIP-24/33 패턴(`(eventRoot, dApp)` per-pair) 그대로. 별도 작업 불요. **잔존(상태 변경 없음).**
 6. ~~**LinkerApp base 컨트랙트 스펙**~~ — *해소.* publish 폐기로 base 헬퍼 무의미.
 7. ~~**`publish` 함수 세부**~~ — *해소.* publish 자체 폐기.
-8. **STC use case 측 미해결** (§12 후속): (a) settle 시 STC 행선지(burn / payee 계정 / 응답 데이터 중 어느 것), (b) PaymentBridge ccApp 분리 vs STC 통합 결정, (c) `approve`의 BPrN/BPuN 동기화 모델. **잔존.**
+8. **STC use case 측 미해결** (§12 후속): (a) settle 시 STC 행선지(burn / payee 계정 / 응답 데이터 중 어느 것), ~~(b) PaymentBridge ccApp 분리 vs STC 통합 결정~~ — *해소(2026-06-10, §16)*: **PaymentBridge를 별도 ccApp으로 두지 않고 STC 체인코드의 기본 기능으로 통합** (`approve` 포함), (c) `approve`의 BPrN/BPuN 동기화 모델 — `approve`가 STC 체인코드 기본 기능으로 확정된 전제 위에서 검토. **(a)·(c) 잔존.**
 9. ~~**BTIP-26/34 Escrow Lifecycle 섹션에 IntendedHandler 결정 패턴 권장 명문화**~~ — §13 §6에 BTIP 명문화 사항으로 통합 (publish 무관하게 적용).
 
 ---
@@ -349,7 +349,7 @@ Spec-level enforcement를 위해 BTIP-37에 cooperative ccApp 등록 메커니�
 - ~~(b) **`LinkerEndpoint.publish`(BPuN) 스펙**~~ — *해소.* publish 자체 폐기.
 - ~~(c) **`LinkerApp._lkPublish` 스펙**~~ — *해소.* base 헬퍼 무의미.
 - ~~(d) **LinkerResult를 LinkerPublish로 흡수**~~ — *해소.* LinkerPublish 부재.
-- (e) **STC use case 측 미해결** — settle 시 STC 행선지(burn/payee 계정/응답 데이터), PaymentBridge ccApp 분리 vs STC 통합, approve의 BPrN/BPuN 동기화. **잔존.**
+- (e) **STC use case 측 미해결** — settle 시 STC 행선지(burn/payee 계정/응답 데이터), ~~PaymentBridge ccApp 분리 vs STC 통합~~(*해소 2026-06-10, §16 — STC 통합*), approve의 BPrN/BPuN 동기화. **행선지·approve 동기화 잔존.**
 - (f) **BTIP-26/34 Escrow Lifecycle 섹션에 IntendedHandler 결정 패턴 명문화** — §15 §6 BTIP 명문화 사항에 통합. **잔존(작성 대기).**
 - (g) **수준 2 cryptographic enforcement (향후)** — BTIP-19 확장으로 audit state proof 추가, RWset/state-proof 기반 LinkerEndpointCC 경유 검증. *publish 무관, 별도 미해결.* **잔존.**
 - ~~(h) **BTIP-25 deprecation 계획**~~ — *불요.* LinkerPublish가 자리잡지 않으므로 BTIP-25는 그대로 운용. (단, BPrN-origin 이벤트 발행을 BTIP-25에 한정할지/더 일반화할지는 별도 검토 가능.)
@@ -422,7 +422,7 @@ BPuN dApp이 emit한 이벤트의 `contractAddress`(evm 이벤트 index 0)는 EV
 
 1. **BTIP-37**: §13.5의 LINKER_CCS role NOTE 제거. publish 가정에 묶여 있어 본 결정으로 무의미. **(완료 2026-06-01)**
 2. **BTIP-21·BTIP-29**: publish 관련 메소드/이벤트 추가 *없음*. 기존 onProof/OnProof로 충분. **(작업 자체 불요)**
-3. **BTIP-25**: 그대로 유지. BPrN-origin 이벤트는 `TransferEventElems`로 계속 발행.
+3. **BTIP-25**: 그대로 유지. BPrN-origin 이벤트는 `TransferLogElems`(구 `TransferEventElems`)로 계속 발행.
 4. **BTIP-26·BTIP-34**: 변경 *없음*. 일반 LinkerApp 인터페이스 스펙이므로 결제 도메인 권한 모델을 박지 않는다.
 
 **§15.4 권한 3분기(자기 자금 / allowance / permit)와 `requestedBy = contractAddress` 매핑은**:
@@ -453,5 +453,18 @@ publish 폐기로 양방향이 *완전 대칭* — endpoint 경유 없이 origin
 > **2026-06-01 정정**: §15.6 정정으로 BTIP-26/34 명문화 작업은 *불요*로 결정. BTIP-37 LINKER_CCS 제거는 완료.
 
 1. **결제 이벤트 정의 BTIP** (선결 — 권한 모델을 BTIP 차원에서 명문화하려는 경우): 결제 이벤트의 필드(`payer`/`payee`/`amount`/correlationId 등)를 정의하는 새 BTIP가 있어야 §15.4의 권한 3분기·`requestedBy` 매핑을 그 BTIP 안에 박을 수 있음. 현재는 use case 가이드(§15.4)로 보관.
-2. **STC use case 미해결 항목** (§10-8 잔존). settle 행선지, PaymentBridge 분리, approve 동기화. 위 항목 1을 진행한다면 함께 정의.
+2. **STC use case 미해결 항목** (§10-8 잔존). settle 행선지, approve 동기화 (PaymentBridge 분리 여부는 2026-06-10 해소 — §16). 위 항목 1을 진행한다면 함께 정의.
 3. **2PC 코드 구현** — on-bpun/on-bprn 양쪽에 LinkerResult/onResult/handleLinkerResult/try-catch/nonReentrant 추가, BPuN→BPrN 이벤트 Prover(u2r) 구현. 권한 모델 BTIP 명문화와 독립적으로 진행 가능.
+
+---
+
+## 16. (2026-06-10) PaymentBridge 폐기 — STC 체인코드 기본 기능으로 통합
+
+> 사용자 결정. §12.4 Architecture 2 채택 이후 보류돼 있던 "PaymentBridge ccApp 분리 vs STC 통합"(§10-8(b), §14(e))을 종결.
+
+- **결정**: **PaymentBridge를 별도 ccApp으로 두지 않는다.** 크로스체인 결제 처리(보류/잠금 상태 관리, `HandleLinkerEvent`/`HandleLinkerResult` 구현, 권한 3분기 평가)는 **STC 체인코드의 기본 기능**으로 구현한다.
+- **`approve`의 위치**: STC 체인코드가 `approve`(allowance 관리)를 기본 기능으로 보유한다. §15.4 권한 3분기의 분기 2(`allowance[payer][requestedBy]`)는 STC 체인코드 자체 상태로 평가된다 — 별도 브리지 컨트랙트에 allowance를 위임하지 않음.
+- **함의**:
+  - STC 체인코드가 [BTIP34](../docs/BTIPS/btip-34.md) 인터페이스(LinkerApp 콜백)를 직접 구현하는 ccApp이 된다. §12.4 Architecture 2("STCCC가 직접 escrow")와 정합.
+  - 잔존 항목 (a) settle 행선지, (c) approve 동기화 모델은 *STC 체인코드 내부 설계* 문제로 좁혀짐 — 별도 컴포넌트 경계 설계는 불요.
+- **§10-8(b)·§14(e) 해당 부분 해소.**

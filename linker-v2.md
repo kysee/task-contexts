@@ -1,6 +1,50 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-06-01 — `audit-report-2026-05-28.md` 결과를 기준으로 실제 리포 상태(HEAD `31466e0`)와 재동기화. on-bprn 2026-05-26 구현 세션 산출물은 커밋 `f414756`/`31466e0`로 실제 반영됐음을 확정. 이전 "구현 세션" 항목들의 정합 상태는 §"2026-06-01 — 재동기화" 참조.
+> 마지막 업데이트: 2026-06-10 (구현 사이클 1일차 종료) — BTIP 리뷰 사이클 코드 갭 정리 후 **본격 구현 착수**: LinkerRegistry(양 체인) → LinkerPolicy/BPrN → hex 와이어 전환 → LinkerNullifier(양 체인) → LinkerVerifier(양 체인) 순으로 스펙 정합 구현 완료. 아래 §"0. 작업 핸드오프" 절이 현재 상태의 단일 진입점.
+
+---
+
+## 0. 작업 핸드오프 (2026-06-10 작성 — 여기서부터 이어서 읽기)
+
+> 노트북 이동 대비 요약. 상세는 각 날짜 절 참조.
+
+### 0.1 오늘 한 일 (2026-06-10, 시간순)
+
+1. **문서 후속 정리** (사용자 지시): btips-2pc-design.md §5 재정정(correlationId — BPrN-origin=`tx_event_root` 강제 / BPuN-origin=명시 id 비대칭 회귀), bpun-origin-payment-design.md **§16 신설(PaymentBridge 폐기 — STC 체인코드 기본 기능으로 통합, approve 포함)**, btip-39 버전 v0.34.24 통일, 오탈자 일괄, btip-40 필드 재정합(correlationId 선두 + beneficiary 추가 — btip-25와 시퀀스 대칭 복원), btip-25 Beneficiary NOTE(EIP-5564 **Stealth Address** — "Secure Address" 아님).
+2. **LinkerRegistry 구현** — §"2026-06-10 — LinkerRegistry 구현" 참조. uint256 chainId, Err* 에러, BPrN keccak role(hex 와이어), `setSelfContract` 편의 함수.
+3. **LinkerPolicy/BPrN 구현** — §"2026-06-10 — LinkerPolicy/BPrN 구현" 참조. hex DTO 폐기 → btip-32 스펙 구조체, `BPuNValidatorSetProof` 개명, Address-PubKey 파생 일치 강제. (LinkerPolicy/BPuN 정책 엔진은 **불가침** — 사용자 지시.)
+4. **hex 와이어 전환** (사용자 redirect: "base64 말고 hex") — §"2026-06-10 — on-bprn 와이어 인코딩 hex 전환" 참조. `types.HexBytes` 도입. **핵심 발견: contractapi는 최상위 byte-slice 파라미터에 raw 문자열을 그대로 주입**(JSON 미경유) → 최상위 byte 파라미터는 hex string으로 선언하는 원칙 확정.
+5. **LinkerNullifier 구현** — §"2026-06-10 — LinkerNullifier 구현" 참조. markProcessed 내부 revert + `DuplicateProof` IBTIP24로 이동, setRegistry 패턴, BPrN `SetRegistry`/`ccAppId`.
+6. **LinkerVerifier 구현** — §"2026-06-10 — LinkerVerifier 구현" 참조. setRegistry 패턴, 페이로드 rename(`BPrNTxEventProof`/`tx_event_root_proof` — Solidity·스크립트·prover-ts 와이어까지), **스펙 정정**(btip-19/23 Step 5 리프는 preHashed — 재해싱 아님), endpoint→nullifier base64 인자 잠재 버그 2건 해소.
+7. **`BPuNTxEventProof` 개명 확정** (사용자: "BPuNTxEventProof이 맞는거야") — btip-28 정의 문서 포함 전면 개명 완료.
+
+### 0.2 컴파일/검증 상태
+
+- **Solidity**: solc 0.8.28(cancun) 단독 컴파일로 5개 컨트랙트(Registry/Nullifier/Endpoint/Verifier/BTIP26Dapp) 통과. ⚠️ 환경 제약으로 `npx hardhat compile` 정식 실행은 미수행 — **집에서 1순위 확인**.
+- **Go (on-bprn)**: 환경에 Go 부재로 **컴파일 미수행** — **집에서 1순위로 `cd verifier/on-bprn && go mod vendor && go build ./...`**. 정적 점검(시그니처·grep)만 완료. `golang.org/x/crypto/sha3` 직접 import 추가됨(vendor 기존재, go.mod indirect → tidy 시 정리됨).
+- **prover-ts**: `npx tsc --noEmit` 통과.
+- **미실행 테스트**: BPrN-origin end-to-end(submit-proof) — 페이로드 필드 rename(`tx_event_root_proof`)이 prover API 응답↔스크립트↔컨트랙트에 일관 적용됐는지 localnet 재검증 필요.
+
+### 0.3 다음 작업 (우선순위)
+
+1. **(집 도착 직후) 빌드 검증**: on-bprn `go build ./...`, on-bpun `npx hardhat compile`. 깨지면 본문 각 구현 절의 변경 파일 목록으로 추적.
+2. **LinkerEndpoint 전면 개정 (BTIP-21/29)** — 마지막 남은 컴포넌트 갭. on-bpun: Terms/`handlerDApp` rename, `ProofReceived`/`ProofVerified` 이벤트 제거, markProcessed **선행**(현재 코드는 추출→mark→verify 순서로 이미 유사하나 스펙 순서 재확인), `setNullifierContract`/`setVerifierContract` 폐기→`setRegistry`, 2PC(`onResult(payload, handlerDApp)`, `LinkerResult(correlationId, handlerDApp, status)`, try/catch+`IBTIP26.ErrAppLowGas` 분기, nonReentrant). on-bprn: `OnProof/OnResult(ctx, payload, handlerCcId)`, `LinkerResultElems` 3 elems, `ProofVerifiedEventElems` 발행 제거, MarkProcessed 선행.
+3. **BTIP-26/34 콜백 + BTIP-40 표준 이벤트** — BTIP26Dapp/dapp-example에 `handleLinkerResult`/`HandleLinkerResult`, `cancelLinkerEvent` admin 모델, `TransferLogAttrs` 이벤트.
+4. **u2r Prover** (BPuN→BPrN, end-to-end 미싱 피스) — `prover-ts/src/prover/u2r/` 신설. **hex 와이어 기준**. btip39 prover의 header-merkle 재사용.
+5. multi-peer block-commit-sig 수집.
+
+### 0.4 보류/관찰 (사용자 결정 대기 또는 타인 영역)
+
+- **IBTIP22 메소드명 불일치**: btip-22 스펙 `verifyChannelEndorsementPolicy` vs 코드 `verifyChannelEndorsement` — 정책 스위트(ryan 영역) 불가침이라 verifier는 현행 이름 호출. 정합 필요.
+- **결제 이벤트 정의 BTIP** 미작성 (권한 3분기 명문화 선결 조건 — bpun-origin-payment-design §15.9).
+- STC use case 잔존: settle 행선지, approve BPrN/BPuN 동기화 (§10-8 (a)(c) — PaymentBridge 분리 문제는 §16에서 해소).
+
+### 0.5 오늘 확정된 컨벤션 (코드 작성 시 적용)
+
+- **와이어 byte 값 = hex** (base64 금지): 구조체 필드는 `types.HexBytes`, 최상위 파라미터는 hex string 선언(contractapi raw passthrough 때문). c2c 전용 []byte는 raw 허용.
+- **에러 `Err` prefix** (스펙 정의 에러는 스펙 이름 그대로: `DuplicateProof`, `BlockEventMerkleProofFailed` 등).
+- **모든 컴포넌트는 LinkerRegistry 주소 하나만 보유** — `getContract(block.chainid, LINKER_*)`(BPuN) / `ResolveContract(role)`(BPrN, keccak role hex). 부트스트랩 메소드명: BPuN `setRegistry`, BPrN은 BTIP별로 `SetRegistryID`(endpoint/verifier) vs `SetRegistry`(nullifier).
+- 합의-크리티컬 연산은 tendermint-ethaddr 포크 직접 호출, BTIP-32 구조체는 순수 직렬화 경계.
 
 ---
 
@@ -241,14 +285,14 @@ if (sibBuf.equals(ZERO32)) {
 
 ---
 
-## 미완료 (2026-06-01 재정리)
+## 미완료 (2026-06-10 재정리)
 
-> 자세한 현황과 새로 발견된 갭은 §"2026-06-01 — 재동기화" 참조.
+> 자세한 현황과 새로 발견된 갭은 §"2026-06-01 — 재동기화" + §"2026-06-10 — BTIP 리뷰 사이클 코드 갭" 참조.
 
 - **BPuN→BPrN 이벤트 Prover 미구현** (end-to-end의 결정적 미싱 피스). `prover-ts/src/prover/u2r/` 디렉토리 자체 부재 — 감사 시점의 placeholder도 사라짐.
-- **2PC 미구현** — 설계는 `btips`/`btips-2pc-design`에 완결돼 있으나 코드 미착수. 누락 항목: on-bpun(`IBTIP21.onResult`, `LinkerResult` 이벤트, `handleLinkerResult`, `try/catch`, `nonReentrant`, `MIN_CALLBACK_GAS`, `cancelLinkerEvent` IBTIP26 갱신), on-bprn(`OnResult`, `HandleLinkerResult`, `LinkerResultElems`).
+- **2PC 미구현** — 설계는 `btips`/`btips-2pc-design`에 완결돼 있으나 코드 미착수. 누락 항목(2026-06-10 개정 스펙 기준): on-bpun(`IBTIP21.onResult(payload, handlerDApp)`, `LinkerResult(correlationId, handlerDApp, status)` 이벤트, `handleLinkerResult(correlationId, handleCcId, status)`, `try/catch` + `IBTIP26.ErrAppLowGas` 분기, `nonReentrant`), on-bprn(`OnResult(ctx, payload, handlerCcId)`, `HandleLinkerResult`, `LinkerResultElems` 3 elems). ~~`MIN_CALLBACK_GAS`~~ — 스펙에서 제거됨(2026-06-01).
 - **Prover multi-peer block-commit-sig 수집** — 여전히 단일 블록 조회(피어 1개 sig). BTIP-17 검증 강도를 끌어올리려면 각 endorser 피어에게 개별 블록 조회 필요.
-- **on-bpun 정책 엔진 문서화** — `LinkerPolicyVerifier.sol` 외 6개 파일(아래 §"2026-06-01 — 재동기화" 1.B)이 코드에 존재하나 본 컨텍스트 문서엔 기재 부족. BTIP-22 구현 형태(`signatureRuleTree`, `implicitMetaPolicy`, Fabric channel config 기반)로 확장됐음을 인터페이스/스펙 차원에서 정리 필요.
+- ~~**on-bpun 정책 엔진 문서화**~~ — **해소(2026-06-10)**: ryan의 LinkerPolicy 스위트(btip-15/18/22/38)가 해당 스펙 문서. 코드 ↔ 스펙 정합 확인은 §"2026-06-10 — BTIP 리뷰 사이클 코드 갭" 참조.
 - **`linker-v2` 리포 컴파일 검증** — 샌드박스에서 Go(`go build`)·Hardhat·Foundry 모두 미수행. 로컬에서 `cd verifier/on-bprn && go mod vendor && go build ./...` 및 `cd verifier/on-bpun && npx hardhat compile`(또는 `forge build`) 확인 필요.
 - `Counter.sol` 샘플 파일 삭제 (hardhat init 생성물) — 미확인.
 
@@ -814,4 +858,245 @@ contracts/
 
 - 본문(이 문서)은 §"2026-06-01" 시점에 코드 사실에 맞춰 정렬됨. `audit-report-2026-05-28.md`는 *역사 기록*으로 보존하되, "어느 브랜치에도 없음" 판정 항목들은 위 §1.A로 해소됐음을 유의.
 - 향후 본문의 "✅ 완료" 표기는 *코드에 푸시된 시점의 기록*임을 명확히 하기 위해 가능하면 커밋 해시 동반 기록 권장(예: `…(반영: f414756)`).
+
+---
+
+## 2026-06-10 — BTIP 리뷰 사이클(2026-06-05~10) 코드 갭
+
+> 사용자 직접 리뷰로 BTIP 스펙이 개정됨 (상세: `task-contexts/btips.md` §"2026-06-05 ~ 2026-06-10"). 코드는 미변경이므로 §"2026-06-01 — 재동기화" §1.B의 기존 갭에 **아래 항목이 추가/변경**된다. 구현 착수 시 §1.B와 본 절을 함께 소화할 것.
+
+### on-bpun (Solidity) 추가 갭
+
+| 스펙 변경 | 코드 영향 |
+|---|---|
+| 파라미터명 `targetDApp` → `handlerDApp` (BTIP-21/24/26) | `IBTIP21/24/26.sol` + 구현체 전반 rename |
+| `onProof(payload, handlerDApp)` + **`onResult(payload, handlerDApp)`** — onResult도 handler 명시 수신 (BTIP-21) | `onResult` 신설 시 새 시그니처 기준. OriginContract 기반 자동 라우팅 설계 폐기됨 |
+| `LinkerResult(bytes32 correlationId, address handlerDApp, uint8 status)` 3필드 (BTIP-21) | 2PC 구현 시 이 시그니처로. 구 5필드(originChannelId/originChaincodeId 포함) 설계 폐기 |
+| `markProcessed`를 **암호학적 검증보다 선행** 호출 (BTIP-21 onProof/onResult) | `LinkerEndpoint.onProof` 호출 순서 변경 (현 코드는 verify → checkAndMark 순) |
+| 에러 `Err` prefix — `ErrAppLowGas`(BTIP-26), `ErrUntrustedSource(address)`(BTIP-21), `ErrUnknownContract`/`ErrUnauthorized`(BTIP-37) | ~~`LinkerRegistry.sol` rename~~ **✅ 반영(2026-06-10 구현)**. `ErrAppLowGas`/`ErrUntrustedSource`는 미구현 항목의 명칭 확정 |
+| `handleLinkerResult(bytes32 correlationId, string handleCcId, bool status)` (BTIP-26) | 2PC 구현 시 이 시그니처로 |
+| **IBTIP37 `chainId` 타입 `bytes32` → `uint256`** + BPrN chainId = `uint256(sha256(channelName + "/BPrN"))` (BTIP-37) | ~~`IBTIP37.sol`/`LinkerRegistry.sol` 키 타입 변경~~ **✅ 반영(2026-06-10 구현, §아래 LinkerRegistry 구현 절)**. 컴포넌트들의 `bytes32(block.chainid)` 캐스팅 제거는 setRegistry 구현 시 적용 |
+| `TransferLogAttrs`(BTIP-40) 개정 (2026-06-10) — `(bytes32 indexed correlationId, address indexed from, address indexed to, uint256 amount, address beneficiary, bytes memo)`, BTIP-25와 필드 시퀀스 동일 | 표준 event 자체가 코드 미구현 (기존 갭) — 구현 시 개정 시그니처 기준 |
+
+### on-bprn (Go) 추가 갭
+
+| 스펙 변경 | 코드 영향 |
+|---|---|
+| 타입명 `BPuNTxEventProofPayload` → `BPuNTxEventProof` (BTIP-29) | `types/types.go` rename |
+| `OnProof(ctx, payload, handlerCcId)` / **`OnResult(ctx, payload, handlerCcId)`** — 파라미터명 `appChaincodeID` → `handlerCcId`, OnResult도 handler 명시 수신 (BTIP-29) | `linker-endpoint/main.go` 시그니처 정합. originChaincodeId 기반 자동 라우팅 폐기 |
+| `MarkProcessed`를 암호학적 검증보다 선행 (BTIP-29 OnProof) | OnProof 단계 순서 변경 |
+| **`ProofVerifiedEventElems` 제거** — fire-and-forget은 이벤트 미발행 (BTIP-29) | `linker-endpoint`가 해당 이벤트를 발행 중이면 제거 |
+| `LinkerResultElems` 3 elems: CorrelationId(g4)·HandlerCcId(g5)·Status(g6), selector `sha256("LinkerResultElems([]bytes,string,byte)")` (BTIP-29) | 2PC 구현 시 이 구조로. OriginChainId/OriginContract 폐기 |
+| `LinkerResultRef{CorrelationIndex int64, Status bool}` — `Accepted` → `Status` (BTIP-34) | 2PC 구현 시 json 태그 `status` |
+| `HandleLinkerResult(ctx, correlationId, handlerDApp, status)` / `CancelLinkerEvent`는 **Admin 전용** (BTIP-34) | dapp-example 콜백 시그니처 + CancelLinkerEvent 접근 제어 |
+| Nullifier 파라미터명 `appChaincodeID` → `ccAppId`, `SetLinkerEndpointID` → `SetRegistry` (BTIP-33) | `linker-nullifier/main.go` — SetRegistryID 패턴은 기 구현(2026-05-26), 메소드명 `SetRegistry` 정합 여부 확인 |
+| `SetLinkerPolicyID` → `SetRegistryID` (BTIP-31) | 기 구현(2026-05-26 레지스트리 리팩토링)과 일치 — 확인만 |
+
+### LinkerPolicy 스위트 (btip-15/18/22/38, ryan) ↔ on-bpun 정책 엔진
+
+- §"2026-06-01 — 재동기화" §3에서 "본문 미기재"로 관찰했던 on-bpun 정책 엔진(`LinkerPolicyVerifier`/`LinkerPolicyLib`/`LinkerPolicyTypes`/`SignatureVerifier` + `lib/*`)의 **스펙 문서가 생겼다**: btip-15(데이터셋) → btip-38(Orderer 추출·블록 메타데이터 index 6 기록) → btip-18(`initPolicy`/`syncPolicy` 주입·동기화) → btip-22(`verifyChannelEndorsementPolicy` 검증).
+- **확인 필요**: 코드의 `verifyBlockValidationPolicy`/`verifyChannelEndorsement(Policy)`/`verifyPolicy`와 btip-18/22 정의(`initPolicy`/`syncPolicy`/`verifyChannelEndorsementPolicy` 시그니처·에러)의 정합 여부. btip-38은 BPrN 코어(Orderer) 측 작업이라 linker-v2 리포 범위 밖(bpn-core 쪽).
+
+### 우선순위 영향
+
+§"2026-06-01" §2의 우선순위(1. u2r Prover, 2. 2PC, 3. multi-peer sig)는 유지하되, 2PC 구현은 **본 절의 개정 시그니처 기준**으로 진행한다.
+
+---
+
+## 2026-06-10 — LinkerRegistry 구현 (BTIP-37 개정 정합)
+
+> 본격 구현 사이클의 첫 작업. BTIP-37 개정 스펙(uint256 chainId, Err* 에러, BPrN string 인터페이스 + keccak role)을 양 체인 코드에 반영. 기존 구현을 대체.
+
+### on-bpun (Solidity)
+
+- **`interfaces/IBTIP37.sol` 재작성**:
+  - `chainId` 타입 `bytes32` → **`uint256`** (event/error/getContract/setContract 전부).
+  - 에러 rename: `UnknownContract` → **`ErrUnknownContract(uint256, bytes32)`**, `Unauthorized` → **`ErrUnauthorized()`**.
+  - 주석의 chainId 규약 갱신 — self = `block.chainid`(캐스팅 없음), BPrN = `uint256(sha256(channelName + "/BPrN"))`, BPrN 체인코드 주소 = BTIP9 `sha256(channelName + "-" + chaincodeName)` 하위 20B.
+- **`LinkerRegistry.sol` 재작성**:
+  - 매핑 `mapping(uint256 => mapping(bytes32 => address))`.
+  - `setContract`를 `onlyOwner` modifier 대신 **`onlyGovernance`**(내부 `if (msg.sender != owner()) revert ErrUnauthorized();`)로 게이트 — revert가 BTIP-37 표준 에러로 나가도록 (OZ `OwnableUnauthorizedAccount` 대신).
+  - **BPrN 변환 헬퍼 2개 신설** (public pure, 인터페이스 외 구현 편의): `bprnChainId(channelName)` = `uint256(sha256(channelName ‖ "/BPrN"))`, `bprnChaincodeAddress(channelName, chaincodeName)` = `address(uint160(uint256(sha256(channelName ‖ "-" ‖ chaincodeName))))` (하위 20B = index 12~31).
+  - Role 상수 4개(keccak256) 유지. CREATE2/거버넌스 TODO 주석 유지(강한 거버넌스는 별도 BTIP 여지로 문구 조정).
+- **`scripts/beatoz/utils.ts`**: CUSTOM_ERRORS 테이블 — `82b42900 Unauthorized()` 제거, **`cc12cef6 ErrUnauthorized()`** + **`4a696776 ErrUnknownContract(uint256,bytes32)`** 추가.
+
+### on-bprn (Go)
+
+- **role 식별자 = keccak256(role name) 32B로 통일** (설계 해석): BTIP-37 Roles 절("역할 이름의 keccak256 해시를 bytes32 식별자로 사용")이 인터페이스 공통 규약이고, BPrN 인터페이스의 `role []byte`는 그 32B 식별자로 해석. 양 체인이 동일 role 키를 공유하게 됨. (이전 구현은 role-name string)
+- **`types/ibtip37.go` 재작성**: `IBTIP37` 시그니처를 스펙 그대로 — `GetContract(ctx, channelName string, role []byte) (string, error)`, `SetContract(ctx, channelName, chaincodeName string, role []byte) error` (파라미터명 channelID/chaincodeID → channelName/chaincodeName, SetContract 인자 순서 = 스펙). **`RoleID(name) []byte`** 헬퍼 신설(`golang.org/x/crypto/sha3` NewLegacyKeccak256 — vendor에 기존재). Role* name 상수 유지. 기대 해시값 4종을 주석으로 cross-check 기록.
+- **`linker-registry/main.go` 재작성**: World-State 키 = `REG_<channelName>_<hex(role)>`. `role` 길이 32B 검증. 이벤트 `ContractRegistered` payload `{channel_name, chaincode_name, role(hex)}`.
+- **`types/registry.go` `ResolveContract`**: 호출자 시그니처 유지(`(ctx, roleName string)` — endpoint/verifier/nullifier/dapp 4개 호출처 무변경). 내부에서 `RoleID(role)`을 계산해 `json.Marshal`(→ `"<base64>"`)로 인자 구성 — contractapi `[]byte` 파라미터의 JSON 경계 규약.
+
+### 부트스트랩 순서 갱신 (on-bprn)
+
+> **2026-06-10 (hex 전환) 갱신**: 최초 구현의 "quoted base64 role 인자"는 같은 날 hex 전환 작업(§"2026-06-10 — on-bprn 와이어 인코딩 hex 전환")에서 **plain hex string**으로 교체됨. 아래가 현행.
+
+`SetContract` 인자 순서·형식: `(channelName, chaincodeName, role)`, role은 **hex(keccak256(roleName))** 64자 문자열(0x 허용).
+
+| role | keccak256 hex (CLI 인자 그대로) |
+|---|---|
+| LinkerEndpoint | `4ed35b94634c3f9fd25a8993e4528daad7eb89221b566ea0af412ad4a03405d3` |
+| LinkerVerifier | `822055b50a5a52035b99bbc44511444e8cc9f3d81703d9468857e6931672e0bb` |
+| LinkerPolicy | `e7465b2d910809841cf34ad7fef5d296fa00ac87b94b155e839049deb8b58bf6` |
+| LinkerNullifier | `2d8fbdab736f2df6d8a770a3ad0847ec0ccdc713e0b14586f0c1845074c0f253` |
+
+예: `{"Args":["SetContract","localchannel0","linker-verifier","822055b50a5a52035b99bbc44511444e8cc9f3d81703d9468857e6931672e0bb"]}`. 이후 단계(각 컴포넌트 `SetRegistryID`, `SetValidatorSet`)는 §"2026-05-26 (구현 세션)" 부트스트랩 순서와 동일.
+
+### 검증 상태
+
+- **Solidity**: 샌드박스 Hardhat은 HHE21(기존 제약) → **solc 0.8.28(cancun) 단독 컴파일로 검증 통과** (LinkerRegistry.sol + IBTIP37.sol + OZ Ownable, 에러 0). 로컬에서 `npx hardhat compile` 재확인 권장.
+- **Go**: 샌드박스에 Go 미설치(기존 제약) → 로컬 `cd verifier/on-bprn && go build ./...` 필요. `golang.org/x/crypto`는 go.mod에 indirect로 기존재 + vendor에 sha3 포함 — 직접 import로 전환되므로 `go mod tidy` 시 indirect 마크만 제거됨.
+- 에러 셀렉터 검증: `keccak256("ErrUnauthorized()")[:4] = cc12cef6`, `keccak256("ErrUnknownContract(uint256,bytes32)")[:4] = 4a696776` (viem으로 계산).
+
+### 남은 연결 작업 (LinkerRegistry 후속)
+
+- BTIP-21/23/24 `setRegistry` 단일화 시 본 개정 키 타입(`uint256 chainId`) 기준으로 조회 코드 작성 — `getContract(block.chainid, LINKER_*)`.
+- deploy 스크립트(`deploy.ts`)에 LinkerRegistry 배포·등록 단계 추가 (현재 스크립트는 레지스트리 미배포).
+
+---
+
+## 2026-06-10 — LinkerPolicy/BPrN 구현 (BTIP-32/39 개정 정합)
+
+> 구현 사이클 2번째 작업. 개정 btip-32/39 기준으로 on-bprn `linker-policy` 정합. **LinkerPolicy/BPuN(정책 엔진)은 범위 밖 — 미변경** (사용자 지시).
+
+### 데이터 모델 교체 — hex DTO 폐기, 스펙 구조체 채택
+
+- **`types/validatorset_dto.go` 삭제** — `ValidatorSetDTO`/`ValidatorDTO`/`HexToBytes`/`BytesToHex` 제거. 2026-05-26에 도입했던 "외부 = hex 문자열" 경계 모델을 폐기하고, btip-32 Data Structures의 **스펙 구조체를 직렬화 경계로 직접 사용**:
+  - `types/ibtip32.go` — `Validator{Address(20B), PubKey(33B), VotingPower int64}`, `ValidatorSet{Height, Validators, TotalPower(optional)}`. byte 필드는 contractapi JSON 경계에서 ~~base64~~ → **hex** (같은 날 hex 전환, §"2026-06-10 — on-bprn 와이어 인코딩 hex 전환").
+  - `ToProto()`(tmproto 변환, hex 파싱이 없어져 **무오류 시그니처로 단순화**)·`Entries()`(infallible) 메소드를 스펙 구조체로 이동. 크립토 내부 = tmproto 유지(직접 구현 금지 원칙 그대로).
+  - `Validator.Address`는 `metadata:",optional"` — SetValidatorSet 입력에서 생략 가능.
+- **근거**: 사용자 리뷰를 거친 btip-32가 []byte 스펙 구조체를 유지·확정했고, BTIP-37 구현에서 role []byte로 이미 "JSON 경계 = base64" 방향이 섰음. hex 편의 계층은 스펙에 없는 비표준 표면.
+
+### linker-policy/main.go 재작성
+
+- **BTIP-32**:
+  - `SetValidatorSet(ctx, *ValidatorSet)` — admin 전용. `normalizeValidatorSet`: pubkey 33B·voting power>0 검증 + **Address-PubKey 파생 일치 강제**(tendermint-ethaddr `ValidatorAddressFromPubKey`; Address 생략 시 자동 파생, 불일치 시 거부 — 이전 구현은 hex 형식만 검사) + TotalPower 재계산.
+  - `GetValidatorSet(ctx, height) (*ValidatorSet, error)` — 범위 조회(VS_ 16자리 0-패딩 키) 유지.
+  - `GetValidator(ctx, height, address []byte)` — **스펙 시그니처로 변경** (구: hex string 주소). 20B 길이 검증.
+  - `GetLatestHeight` 유지.
+- **BTIP-39**: `UpdateValidatorSet(ctx, *BPuNValidatorSetProof)` — 페이로드 타입명 **`ValidatorSetProofPayload` → `BPuNValidatorSetProof`** (개정 btip-39 명명). 검증 5단계(Step 0 무결성 → Step 1 trusted set 조회 → Step 2 Commit 서명 2/3+ → Step 3 RFC6962 헤더 증명(index 8) + amino 디코드 → Step 4 ValidatorsHash 재계산 일치 → Step 5 self-call 저장)·멱등 처리 로직은 기존 구현 유지(스펙 무변). json 태그 동일 — **prover-ts btip39 출력과 와이어 호환 유지** (`trusted_height`/`pubkey`(base64)/`voting_power`/`next_validator_set` 확인).
+- `types/ibtip39.go` — 타입·인터페이스 주석 정합. `types/types.go` — DTO 참조 주석 갱신.
+
+### 파급 수정
+
+- `linker-verifier/main.go` `fetchValidatorSet` — DTO 언마샬 → `types.ValidatorSet` 언마샬 + `ToProto()` (무오류).
+- **부트스트랩 입력 형식**: `SetValidatorSet` JSON byte 필드 = ~~base64~~ → **hex 문자열**(같은 날 hex 전환) — `{"height":H₀,"validators":[{"pub_key":"<hex 66자>","voting_power":N}]}` (`address` 생략 가능 — 자동 파생, `total_power` 생략 가능). jq escape 주의사항(`--arg`/`--rawfile`)은 종전과 동일.
+
+### 검증 상태
+
+- 샌드박스 Go 미설치 → 로컬 `cd verifier/on-bprn && go build ./...` 필요. 정적 점검 완료: tmverify/auth 헬퍼 시그니처 일치, DTO 잔존 참조 0(grep), prover-ts 와이어 필드명 일치.
+- ~~기존 World-State와 저장 형식 비호환(hex JSON → base64 JSON)~~ → 같은 날 hex 전환(아래 절)으로 와이어/저장 모두 hex 유지. 단 구조 변화(필드 구성)는 있으므로 재부트스트랩은 여전히 권장.
+
+---
+
+## 2026-06-10 — on-bprn 와이어 인코딩 hex 전환 (사용자 redirect)
+
+> 사용자 지적: "왜 base64? hex가 가독성에 좋고 BPuN도 hex를 쓴다." — encoding/json의 `[]byte` 기본(base64)을 따랐던 것을 **hex 와이어로 전면 전환**. 아울러 contractapi 직렬화 동작을 vendor 소스로 실측하여 설계 원칙을 확정.
+
+### contractapi 직렬화 실측 (vendor `fabric-contract-api-go/v2` 소스 확인)
+
+- **최상위 파라미터가 byte-slice kind이면**(named type 포함, `types.IsBytes`) JSON 처리 없이 **arg 문자열의 raw bytes를 그대로** 파라미터에 넣는다 (`convertArg`: `reflect.ValueOf([]byte(paramValue))`). 반환도 `%s` raw 출력.
+  - → 직전 LinkerRegistry 구현의 `role []byte` + quoted-base64 인자는 **버그였음** (chaincode가 quoted-base64 문자열의 raw bytes를 role로 받게 됨). 본 전환에서 해소.
+- **구조체(포인터) 파라미터/반환**은 `json.Unmarshal`/`json.Marshal` 경유 → 커스텀 `MarshalJSON`/`UnmarshalJSON`이 동작.
+
+### 설계 원칙 (확정)
+
+1. **구조체 byte 필드** → `types.HexBytes`(신규, `types/hexbytes.go`): `[]byte` underlying(API에 무변환 전달 가능), JSON은 소문자 hex(입력 0x 허용). **JSON null·빈 문자열 → nil** (BTIP16 머클 null 센티넬 보존).
+2. **최상위 byte-값 파라미터** → **hex string으로 선언** + 내부 `HexToBytes` 디코드 (contractapi raw-passthrough 때문에 []byte 선언으로는 hex/base64 어느 쪽도 안전하게 못 받음).
+
+### 변경 파일
+
+- `types/hexbytes.go` 신규 — `HexBytes` + `HexToBytes`(0x 허용; DTO 폐기 때 지웠던 헬퍼 부활).
+- `types/types.go` — `RFC6962Proof{Leaf, Aunts}`, `MerkleProof{Leaf, Siblings}`, `ValidatorSignature{ValidatorAddress, Signature}`, `BPuNTxEventProofPayload{BlockHash, BlockPartsHash}` → HexBytes. (**BPuN-origin 증명 페이로드 와이어 전체가 hex로** — 향후 u2r Prover도 hex 기준.)
+- `types/ibtip32.go` — `Validator{Address, PubKey}` → HexBytes. `GetValidator(ctx, height, address string)` — hex string 파라미터(스펙 []byte의 와이어 표현임을 주석 명시).
+- `types/ibtip39.go` — `BPuNValidatorSetProof{BlockHash, BlockPartsHash}`, `SimpleValidatorEntry{PubKey}` → HexBytes.
+- `types/ibtip37.go` — `role` 파라미터 `[]byte` → **hex string** + `RoleIDHex(name)` 헬퍼. `linker-registry/main.go` — `decodeRole`(hex 디코드 + 32B 검증), 키는 종전과 동일 `REG_<channel>_<hex>`.
+- `types/registry.go` — `ResolveContract`가 `RoleIDHex(role)`을 plain 인자로 전달 (base64 marshal 제거).
+- `types/merkle.go` — `VerifyMerkleProof(siblings []HexBytes)` 시그니처 변경. `types/tmverify.go` — `VerifyRFC6962`에서 aunts `[][]byte` 변환 후 `merkle.Proof` 구성.
+- `linker-policy/main.go` — GetValidator hex 파라미터 반영.
+- **prover-ts btip39** — `validator-set-proof.ts` 출력 base64 → hex(7곳: validator_address/signature/block_hash/block_parts_hash/leaf/aunts/pubkey), `types.ts` 주석 정정. `npx tsc --noEmit` 통과.
+
+### 운영 영향
+
+- `SetValidatorSet` H₀ JSON: byte 필드 = hex 문자열(0x 허용) — `{"height":H₀,"validators":[{"pub_key":"02ab…(66자)","voting_power":N}]}` (address·total_power 생략 가능).
+- `SetContract` role 인자 = 64자 hex (위 부트스트랩 표).
+- nullifier 등 chaincode-간 전용 []byte 파라미터(`eventAttrsRoot` 등)는 c2c raw 전달이라 현행 유지 — CLI 직접 호출 대상 아님.
+
+---
+
+## 2026-06-10 — LinkerNullifier 구현 (BTIP-24/33 정합)
+
+> 구현 사이클 3번째 작업. 양 체인 LinkerNullifier를 개정 스펙에 정합. 부수로 btip-24 슈도코드의 rename 잔재(`targetDApp` 4곳)와 stale 캐스트(`bytes32(block.chainid)` → `block.chainid`, BTIP-37 uint256 개정 미반영)를 스펙 측에서 먼저 정정.
+
+### on-bpun (Solidity) — BTIP-24
+
+- **`IBTIP24.sol` 재작성**:
+  - `markProcessed(bytes32 eventRootHash, address handlerDApp)` — **`returns (bool wasDup)` 제거, 중복 시 내부 `DuplicateProof` revert** (2026-04-21 wasDup 패턴 폐기).
+  - **`error DuplicateProof(bytes32, address handlerDApp)` 정의가 IBTIP21 → IBTIP24로 이동** (발신 주체 원칙). IBTIP21에는 cross-ref 주석만.
+  - `setRegistry(address)` 신설 (owner only). 파라미터 `targetDApp` → `handlerDApp`.
+- **`LinkerNullifier.sol` 재작성**:
+  - `constructor(endpointAddr)` immutable 패턴 폐기 → **무인자 생성자 + `setRegistry`**. `markProcessed`의 onlyLinkerEndpoint를 `IBTIP37(_registry).getContract(block.chainid, LINKER_ENDPOINT)` 동적 조회로.
+  - Nullifier 계산(`sha256(abi.encode(eventRootHash, handlerDApp))`)은 내부 `_nullifier()` 단일화.
+  - 에러 Err* 컨벤션: `ErrUnauthorized`/`ErrNotProcessed(bytes32)`/`ErrRegistryNotSet`/`ErrZeroAddress` (스펙 정의 에러는 `DuplicateProof`뿐 — 나머지는 구현 레벨).
+  - `cancelNullifier`는 msg.sender = handlerDApp 의미 유지.
+- **`LinkerEndpoint.sol` 최소 정합** (BTIP-21 전면 개정은 다음 작업): `markProcessed` 단순 호출(자동 전파)로 변경, wasDup 분기·`DuplicateProof` revert 제거.
+- **`deploy.ts` 갱신**: LinkerRegistry 배포 + `registry.setSelfContract(LINKER_ENDPOINT, endpoint)` + `nullifier.setRegistry(registry)` 단계 추가, `LinkerNullifier()` 무인자. (§"LinkerRegistry 구현" 절의 "deploy.ts 미배포" 잔여 항목 해소.)
+- **`LinkerRegistry.sol`에 `setSelfContract(role, addr)` 편의 함수 추가** — 스크립트가 EVM chainid를 외부에서 알 필요 없이 자기 체인 등록 (BEATOZ는 eth_call류 RPC가 제한적).
+- **`utils.ts`**: `ErrNotProcessed(bytes32)`=`2906a727`, `ErrRegistryNotSet()`=`6bf41600`, `ErrZeroAddress()`=`ecc6fdf0` 추가, DuplicateProof 라벨 handlerDApp 갱신.
+- **검증: solc 0.8.28 단독 컴파일 통과** (LinkerRegistry + LinkerNullifier + LinkerEndpoint 동시).
+
+### on-bprn (Go) — BTIP-33
+
+- **`types/ibtip33.go` 신설** — 스펙 인터페이스 정의 + `var _ types.IBTIP33` 컴파일 타임 검증 (기존엔 인터페이스 부재).
+- `linker-nullifier/main.go`: **`SetRegistryID` → `SetRegistry`**(btip-33 스펙 — endpoint/verifier의 `SetRegistryID`(btip-29/31)와 이름이 다름에 주의, 공유 헬퍼 `types.SetRegistryID`는 유지), 파라미터 `chaincodeID` → `ccAppId`, `NullifierRecord` byte 필드 HexBytes(저장 JSON hex)·`chaincode_id` → `ccapp_id`.
+- `types/nullifier.go`: `CalculateNullifier(eventAttrsRoot, ccAppId)` rename.
+- `eventAttrsRoot []byte` 파라미터는 c2c raw 전달 유지 (hex 전환 원칙의 c2c 예외).
+- MarkProcessed의 caller 검증(SignedProposal 헤더 기반 InvokerChaincodeID == registry의 LinkerEndpoint)·CancelNullifier(호출 체인코드 자신만) 로직은 기존 구현이 스펙과 일치 — 유지.
+
+### 운영 주의
+
+- 부트스트랩에서 **linker-nullifier만 `SetRegistry`**, linker-endpoint/verifier/dapp은 `SetRegistryID` (BTIP별 메소드명 차이).
+- on-bpun 배포 순서 변경: endpoint → registry → nullifier(무인자) → … + registry 등록/연결 단계 (deploy.ts 헤더 주석 참조).
+- 검증: on-bprn은 로컬 `go build ./...` 필요.
+
+---
+
+## 2026-06-10 — LinkerVerifier 구현 (BTIP-23/31 정합)
+
+> 구현 사이클 4번째 작업. **LinkerPolicy/BPuN(정책 엔진 4종 + lib)은 미변경** (사용자 지시 유지). 부수로 스펙 정정 2건 + 페이로드 타입/필드명 rename 일괄 + 잠재 버그 2건 해소.
+
+### 스펙 정정 (구현 전 선행)
+
+- **btip-19/23 Step 5 리프 해시 정정**: 슈도코드가 `leaf_hash = sha256(tx_event_root_proof.leaf)`로 리프를 재해싱했으나, 실제 시스템(Solidity verifier `abi.decode(leaf,(bytes32))` 직접 사용 + prover `fromHashedLeaves` preHashed + 2026-04 localnet end-to-end 통과)은 **preHashed 리프 직접 사용**. 검증된 구현 동작 기준으로 양 스펙 슈도코드 정정 ("이미 32바이트 해시이므로 추가 해시 없이 직접 사용").
+- btip-23 슈도코드 `bytes32(block.chainid)` → `block.chainid` (BTIP-37 uint256 정합, btip-24와 동일 잔재).
+- btip-31/33/34의 `BPuNTxEventProofPayload` 표기 → **`BPuNTxEventProof`** (btip-29 개명 기준). btip-28(정의 문서)도 **사용자 확정으로 `BPuNTxEventProof`로 개명 완료** (2026-06-10, 7곳).
+
+### on-bpun (Solidity) — BTIP-23
+
+- **`IBTIP21.sol` 페이로드 rename**: struct `TxEventProof` → **`BPrNTxEventProof`**, 필드 `event_log_root_proof` → **`tx_event_root_proof`** (btip-19/21 개정 정합).
+- **`IBTIP23.sol` 재작성**: `verifyProof(IBTIP21.BPrNTxEventProof)` + `setRegistry(address)` (`setPolicyContract` 폐기).
+- **`LinkerVerifier.sol` 재작성**: 위임 구조는 기존과 동일(이미 Step 2~4를 정책 컨트랙트에 단일 호출 위임 중이었음) — 변경점은 ① `_policy` 저장 폐기 → `IBTIP37(_registry).getContract(block.chainid, LINKER_POLICY)` 동적 조회, ② Step 번호를 btip-19 기준(2~4/5/6)으로 재표기, ③ `eventLogRoot` 변수명 → `txEventRoot`, ④ 에러 `PolicyNotSet`/`ZeroAddress` → `ErrRegistryNotSet`/`ErrZeroAddress`/`ErrUnauthorized`(Err* 컨벤션, `BlockEventMerkleProofFailed`/`EventMerkleProofFailed`는 스펙 이름 유지).
+- ⚠️ **IBTIP22 메소드명 불일치 관찰**: btip-22 스펙은 `verifyChannelEndorsementPolicy`, 코드 `IBTIP22.sol`/`LinkerPolicyVerifier.sol`은 `verifyChannelEndorsement`(+ 별도 `verifyChannelEndorsementPolicy` 오버로드 2개 존재). 정책 엔진 불가침이므로 verifier는 **현행 `verifyChannelEndorsement` 호출 유지** — 정책 스위트 정합 작업(ryan 영역)에서 해소 필요.
+- **`LinkerEndpoint.sol`**: 페이로드 타입/필드 rename 반영 (BTIP-21 전면 개정은 여전히 다음 작업).
+- **`deploy.ts`**: `verifier.setPolicyContract(policyVerifier)` → `registry.setSelfContract(LINKER_POLICY, policyVerifier)` + `verifier.setRegistry(registry)`. (LINKER_POLICY role에 **LinkerPolicyVerifier**(IBTIP22 구현체)를 등록 — 종전 wiring과 동일 대상.)
+- **`submit-proof.ts`/`utils.ts`**: 필드 rename 반영, `PolicyNotSet` 셀렉터 제거.
+- **prover-ts**: DTO `TxEventProofDto` → `BPrNTxEventProofDto`, 와이어 필드 `event_log_root_proof` → `tx_event_root_proof` (controller/service/test-proof 일괄).
+- **검증**: solc 0.8.28 5개 컨트랙트 동시 컴파일 OK, prover-ts `tsc --noEmit` OK.
+
+### on-bprn (Go) — BTIP-31
+
+- 구조는 기 정합(2026-05-26 레지스트리 리팩토링) — 추가 작업:
+  - **`types/ibtip31.go` 신설** + `var _ types.IBTIP31` assert (기존엔 인터페이스 부재).
+  - `VerifyProof(ctx, payloadJSON string)` → **`VerifyProof(ctx, *types.BPuNTxEventProof)`** — contractapi가 JSON 인자를 구조체로 unmarshal하므로 수동 unmarshal 제거. linker-endpoint의 invokeVerifier(payload JSON 인자 전달)와 와이어 동일.
+  - `SetRegistryID(ctx, ccId)` 파라미터명 정합.
+  - Go 전역 타입 rename: `BPuNTxEventProofPayload` → **`BPuNTxEventProof`** (types.go/linker-verifier/linker-endpoint).
+
+### 잠재 버그 해소 (contractapi raw-passthrough 후속)
+
+- **linker-endpoint → linker-nullifier 인자 버그**: `IsProcessed`/`MarkProcessed` 호출 시 `base64.StdEncoding.EncodeToString(eventAttrsRoot)`를 인자로 전달 — raw passthrough로 nullifier가 base64 문자열 44바이트를 받아 32바이트 검증에 걸리는 잠재 버그(u2r 미구현으로 미발현). **raw bytes 직접 전달로 수정.**
+- **dapp-example → linker-nullifier `CancelNullifier`**: 동일 패턴 수정 (base64 import 제거).
+
+### 검증 상태
+
+- on-bprn: 로컬 `go build ./...` 필요 (샌드박스 Go 부재).
 

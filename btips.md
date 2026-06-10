@@ -1,5 +1,5 @@
 ---
-last_updated: 2026-05-28
+last_updated: 2026-06-10
 ---
 
 # BTIPS 작업 컨텍스트
@@ -37,7 +37,7 @@ Structure BPrNTxEventProofPayload:
     Property cert_chains: Array of Array of ByteArray
     Property block_commit_sigs:     Array of ByteArray
     Property block_event_root:      ByteArray
-    Property event_log_root_proof:  MerkleProof<event_log_root>
+    Property tx_event_root_proof:   MerkleProof<tx_event_root>
     Property event_elem_proofs:     Array of MerkleProof<event_elem>
 ```
 
@@ -47,6 +47,7 @@ Structure BPrNTxEventProofPayload:
 - `mspids` 필드 추가 (조직별 Root CA 조회를 위한 MSP 식별자)
 - `endorser_certs_chains` → `cert_chains` (인증서 체인 자체는 endorser 여부를 의미하지 않으므로 중립적 이름으로 변경)
 - `block_number` 필드 추가 (블록 커밋 서명 입력에 포함, 크로스체인 트랜잭션 식별용)
+- `event_log_root_proof` → `tx_event_root_proof` (2026-06-02, 증명 대상인 tx_event_root 기준 명명 — BPuN 측 용어와 통일)
 
 **Solidity 대응 (btip-21):**
 ```solidity
@@ -56,13 +57,13 @@ struct MerkleProof {
     bytes32[] siblings;
 }
 
-struct TxEventProof {
-    uint64        block_number;
+struct BPrNTxEventProof {
     string[]      mspids;
     bytes[][]     cert_chains;
+    uint64        block_number;
     bytes[]       block_commit_sigs;
     bytes32       block_event_root;
-    MerkleProof   event_log_root_proof;
+    MerkleProof   tx_event_root_proof;
     MerkleProof[] event_elem_proofs;
 }
 ```
@@ -107,7 +108,7 @@ Validator Set (2/3+ Voting Power)
               → 개별 이벤트 속성 (Per-Event Tree의 리프)
 ```
 
-### BPuNTxEventProofPayload (현행 — btip-28 기준)
+### BPuNTxEventProof (현행 — btip-28 기준. 구 BPuNTxEventProofPayload, 2026-06-10 개명 확정)
 
 ```text
 Structure RFC6962Proof:
@@ -126,7 +127,7 @@ Structure ValidatorSignature:
     Property timestamp:          Timestamp   // CanonicalVote 서명 입력에 포함됨
     Property signature:          ByteArray
 
-Structure BPuNTxEventProofPayload:
+Structure BPuNTxEventProof:
     Property height:                   Integer
     Property chain_id:                 String
     Property round:                    Integer
@@ -188,6 +189,80 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 ---
 
 ## 세션별 완료 작업
+
+### 2026-06-05 ~ 2026-06-10 (사용자 직접 리뷰 — 본문 슬림화 + 네이밍·구조 개정 + LinkerPolicy 스위트 합류)
+
+> 본 사이클은 **사용자(beatoz-kyle)가 BTIP 본문을 직접 리뷰·재작성**한 것이 중심 (btip-21/23/24/25/26/29/31/32/33/34/37/39, 순삭감 약 290줄). 동시에 ryan(Gyunam Park)의 LinkerPolicy 스위트(btip-15/18/22/38)가 합류. 2026-06-10 후속 세션에서 오기 수정·README 등재·본 컨텍스트 반영 완료.
+
+#### ✅ 문서 스타일 전환 (전 파일 공통)
+
+- **인터페이스 멤버 설명을 코드 블록 안 `@notice`/`@dev`/`@param`/`@return` 주석으로 이동** — 코드 밖 prose bullet 중복 서술 제거. 본문 prose는 설계 근거(Rationale)만.
+- **Terms 절 도입** (btip-21/29): `dApp/BPuN`(BPuN상 Application Contract), `ccApp/BPrN`(BPrN상 Application Chaincode). 컴포넌트는 `LinkerEndpoint/BPuN` 식 `컴포넌트/체인` 표기.
+- **대칭 문서는 차이만**: btip-33은 "BTIP24의 BPrN 버전, 차이점만 기술" 형태로 축소(Implementation 슈도코드 삭제). btip-26의 2PC 절도 "기본 메커니즘은 BTIP34, 차이만 기술"로 축소.
+- 요약 중복 Conclusion·상태 머신 ASCII 다이어그램·gidx 표의 prose 중복 삭제.
+
+#### ✅ 네이밍 개정
+
+- `targetDApp` → **`handlerDApp`**, `appChaincodeID` → **`handlerCcId`**(라우팅 파라미터) / **`ccAppId`**(Nullifier 계산, btip-33).
+- `accepted: bool` → **`status: bool`** (`LinkerResultRef.Status`, `handleLinkerResult`/`HandleLinkerResult`). btip-26 콜백 파라미터는 `handleCcId`.
+- 에러 **`Err` prefix** 통일: `ErrAppLowGas`(← LinkerAppLowGas 환원), `ErrUntrustedSource(address)`(← UntrustedResultSource), `ErrUnknownContract`/`ErrUnauthorized`(btip-37).
+- btip-29 타입명 `BPuNTxEventProofPayload` → **`BPuNTxEventProof`**. (2026-06-10 사용자 확정으로 정의 문서 btip-28 및 btip-31/33/34 표기·Go 코드까지 전면 개명 완료.)
+- **"LinkerApp" 명칭 폐기**: btip-26 제목 `Application Contract interface on BPuN`, btip-34 제목 `Application Chaincode interface on BPrN`으로 환원. README 동기화.
+
+#### ✅ 구조·프로토콜 개정
+
+- **`LinkerResult` 3필드 단순화**: `(bytes32 correlationId, address handlerDApp, uint8 status)` — `originChannelId`/`originChaincodeId` 제거. 시그니처 `keccak256("LinkerResult(bytes32,address,uint8)")`.
+- **`LinkerResultElems` 3 elems 단순화**: CorrelationId(gidx:4)·HandlerCcId(gidx:5)·Status(gidx:6) — `OriginChainId`/`OriginContract` 제거. selector `sha256("LinkerResultElems([]bytes,string,byte)")`. 정의 위치가 btip-29 Data Structures로 이동.
+- **`onResult`/`OnResult`가 handler를 호출자 명시 파라미터로 수신**: `onResult(payload, handlerDApp)`(btip-21), `OnResult(ctx, payload, handlerCcId)`(btip-29). 검증된 이벤트의 OriginContract/originChaincodeId 기반 자동 라우팅 폐기 — *"제출된 증명을 어떤 handler가 처리해야 하는가는 비즈니스 구현 영역의 책임"* 원칙. 결과 오배송 방어는 수신 앱의 의도-핸들러 대조(+ btip-34 NOTE: 상태 변경은 검증된 `contractAddress` 권한·상태에 한정).
+- **`ProofReceived`/`ProofVerified`(btip-21)·`ProofVerifiedEventElems`(btip-29) 이벤트 전부 제거** — fire-and-forget(`CorrelationIndex < 0`)은 결과 이벤트 미발행.
+- **`markProcessed`/`MarkProcessed`를 암호학적 검증보다 선행** 호출로 순서 변경 (btip-21 onProof/onResult, btip-29 OnProof — 하드 실패 시 등록도 롤백되므로 안전).
+- **btip-25 `TransferLogElems` 개정**: elems 순서 `CorrelationId(gidx:4)·From(5)·To(6)·Amount(7)·Beneficiary(8)·Memo(9)`. **`Beneficiary` 신규** — BPuN에서 `From`을 대리하는 주소(Stealth Address로 `From` 은닉 가능). `CorrelationId`는 BPrN-origin에서 **무조건 `tx_event_root`** 사용 강제. selector는 Go 타입 표기 `sha256("TransferLogElems([]byte,[]byte,[]byte,[]byte,[]byte,[]byte)")`. 트리는 10리프 → 16리프 null 패딩. (btip-40 필드 시퀀스는 2026-06-10 후속 작업에서 재정합 — 아래 참조.)
+- **btip-37 LinkerRegistry 개정**: 제목 `LinkerRegistry interface` 단일화. `chainId` 타입 `bytes32` → **`uint256`**. BPrN chainId 규약 신설 — `uint256(sha256(channelName + "/BPrN"))`. BPrN 측 인터페이스: `GetContract(channelName, role []byte) → chaincodeName`, `SetContract(channelName, chaincodeName, role)`. 신뢰 근거를 "Root CA" → **Trust Anchor**(Validator set·Root CA·Security policy)로 일반화. Chain ID Convention 표·Implementation 절 삭제(BPrN-Specific Considerations로 대체).
+- **btip-31**: `SetLinkerPolicyID` → `SetRegistryID` + LinkerRegistry 동적 조회(`getContract(self_channel, LINKER_POLICY)`). "PoS" → "DPoS".
+- **btip-39**: Validator Set Hash Calculation·Address Derivation 절 삭제. 대신 IMPORTANT 노트 — *모든 BTIP의 Tendermint 참조는 [tendermint-ethaddr](https://github.com/beatoz/tendermint-ethaddr) 포크를 의미* (BPuN은 이더리움 주소체계 적용 포크 사용).
+- **2PC 서술 재배치**: **btip-34가 2PC 기본 문서**(예시 시나리오 + 발신 체인코드 두 역할 + 타임아웃 없음 + 제출 인센티브 + 운영 정책). btip-26은 BPuN-origin이 갖는 차이(명시 correlationId)만 기술. btip-21에는 Rational 절(2PC correlationId 규약 / Application 처리 결과 분리 / Gas 처리와 한계 / Non Reentrant).
+- **btip-34 CAUTION 완화**: "거부 전 PutState 금지" → "`Status=false` 의도 시 선행 `PutState`의 수동 롤백 여부를 면밀히 검토". `CancelLinkerEvent`는 **Admin 전용**으로 강화.
+
+#### ✅ LinkerPolicy 스위트 합류 (ryan, 2026-05-27~28 작성 — 본 컨텍스트엔 미기록이었음)
+
+기존에 "Reserved"(15/18/22)·"철회"(38)로 기록했던 번호들이 ryan의 BPuN-측 LinkerPolicy 체계 문서로 채워짐. on-bpun 코드의 정책 엔진(LinkerPolicyVerifier/LinkerPolicyLib/LinkerPolicyTypes/SignatureVerifier — linker-v2.md §"2026-06-01 재동기화" 1.B 참조)의 스펙 문서화에 해당.
+
+- **btip-15 — BPrN Security Policy Dataset**: *무엇을* 동기화하는가. config block 메타데이터(channelName/sequence/blockNumber/lastProcessed*), 조직 신원(MSP·Root/Intermediate CA·Admin·CRL·NodeOU), 정책(Signature/ImplicitMeta, 서명 규칙 트리), 채널 수준 정책.
+- **btip-38 — LinkerPolicy Data Extraction & Block Recording**: *어떻게 추출·기록*하는가. Orderer가 config block 생성 시점에 정책을 추출·ABI 인코딩하여 **블록 메타데이터 index 6(POLICY)** 에 기록 + Orderer 블록 서명에 바인딩. (구 btip-38 철회 번호 재사용)
+- **btip-18 — LinkerPolicy Initialization & Synchronization Protocol**: *어떻게 주입·동기화*하는가. `initPolicy`(제네시스, sequence==1·blockNumber==0, **신뢰 주체 수행 필수**) / `syncPolicy`(연속성 검증 → 오더러 인증서·서명 검증 → blockValidationPolicy 평가 → 증분 갱신).
+- **btip-22 — LinkerPolicy interface on BPuN**: *어떻게 검증*하는가. `verifyChannelEndorsementPolicy(msgHash, signatures, mspIds, certChains)` — Step 1 인증서 검증(0xff00) → Step 2 서명 검증(0x0100) → Step 3 정책 평가(ImplicitMeta 정족수 + Signature 규칙 트리). 실패 서명자는 무효 처리 후 정족수 미달 시 `PolicyEvaluationFailed`.
+- 체계: 15(무엇) → 38(추출·기록) → 18(주입·동기화) → 22(검증). btip-23(LinkerVerifier)의 Step 2~4 위임 대상이 이 btip-22로 연결됨.
+- 기타 신규: **btip-36 — EVM Storage Slot Query RPC** (Kalix, 2026-05-14): `eth_getStorageAt` (EIP-1967 proxy slot 조회 등).
+
+#### ✅ 2026-06-10 후속 정리 (본 세션)
+
+- btip-26 TIP 오기 수정: `TransferEventAttrs` → `TransferLogAttrs`.
+- btip-25 오기 수정: "9개 리프" → "10개 리프(gidx:0~9)", Memo 주석 gidx 8 → 9.
+- btip-34 말미 미완성 스크래치 노트 제거.
+- README: BTIP15/18/22 Reserved → 실제 제목 등재, BTIP37 제목 frontmatter 정합(`LinkerRegistry interface`).
+- 본 컨텍스트 파일·linker-v2.md 반영.
+
+#### ✅ btip-40 — btip-25와 필드 시퀀스 재정합 + btip-25 Beneficiary NOTE (사용자 지시)
+
+- **btip-40 `TransferLogAttrs` 개정**: 필드 순서를 btip-25와 동일하게 — `bytes32 indexed correlationId, address indexed from, address indexed to, uint256 amount, address beneficiary, bytes memo`.
+  - `correlationId`를 선두로 이동, **`beneficiary` 신규**(btip-25 `Beneficiary`와 동일 위치·의미 — 상대 체인에서 `from`을 대리하는 주소).
+  - indexed 3개 = correlationId(topic.1)·from(topic.2)·to(topic.3). data = ABI-encoded `(amount, beneficiary, memo)`.
+  - selector = `keccak256("TransferLogAttrs(bytes32,address,address,uint256,address,bytes)")`.
+  - Per-Event Tree 매핑·다이어그램·Symmetry 표 갱신 (8 attrs 유지).
+- **btip-25 `Beneficiary` 활용 NOTE 추가** (인용문): `From`을 증명에 포함하면 BPrN 자산 전송 내역 노출, 제외하면 BPuN이 조치 대상을 판단 불가 — 이 모순을 **[EIP-5564 Stealth Addresses](https://eips.ethereum.org/EIPS/eip-5564)** 를 `Beneficiary`에 넣어 해결 (사용자 직접 정정: Secure Address → Stealth Address). `From`은 은닉되고, 전송자는 별도 Stealth Address로 BPuN에서 기대하는 절차가 진행되도록 함.
+- 양 체인 **필드 시퀀스 대칭 복원**: `correlationId, from, to, amount, beneficiary, memo`. (이벤트 이름·selector 해시·발신 형식의 비대칭은 유지 — 체인별 형식 어휘.)
+
+#### ✅ 2026-06-10 후속 정리 2차 (사용자 지시)
+
+- **btips-2pc-design.md 정정**: §5 correlationId — 2026-06-10 재정정 노트(BPrN-origin = `tx_event_root` 강제 / BPuN-origin = 명시 id 비대칭으로 회귀, 단 BPrN도 명시 필드에 싣는 형태). 결정 6에 라우팅 변경 정정(Origin* 자동 라우팅 폐기 → handler 명시 지정), 결정 3·§4 표의 MIN_CALLBACK_GAS → ErrAppLowGas, D-A 재채택, D-B Status 리네임·CAUTION 완화, D-D ProofVerifiedEventElems 제거, D-F handlerCcId/ccAppId 재리네임, §9 #5a 파라미터 현행화.
+- **bpun-origin-payment-design.md §16 신설**: **PaymentBridge 폐기 — 별도 ccApp 두지 않고 STC 체인코드 기본 기능으로 통합**(`approve` 포함, 사용자 결정). §10-8(b)·§14(e) 해당 부분 해소. 잔존: (a) settle 행선지, (c) approve 동기화 — STC 체인코드 내부 설계 문제로 좁혀짐.
+- **btip-39 버전 통일**: Tendermint 버전은 **v0.34.24가 정**(사용자 확인) — IMPORTANT 노트의 v0.34.25 2곳 교정.
+- **오탈자 수정**: btip-21("## Rational"→Rationale, "명배히"→명백히, "값으로 로서", "수신한다.."), btip-25 NOTE 문장 다듬기(+사용자 직접 보강 — Stealth Address 표현), btip-29("이벤틀르"), btip-33("본부서"), btip-34("당사자자", "Rejcted"→`Status` 표현 정리, CAUTION 제목 `Accepted=false`→`Status=false`, CorrelationIndex 경계 "0 이상").
+
+#### 잔존 관찰 (미처리)
+
+- BTIP 변경의 linker-v2 코드 갭은 `linker-v2.md` §"2026-06-10 — BTIP 리뷰 사이클 코드 갭" 참조.
+- 결제 이벤트 정의 BTIP(권한 3분기·requestedBy 매핑의 명문화 선결 조건)는 미작성 — `bpun-origin-payment-design.md` §15.9.
 
 ### 2026-06-02 (문서 리뷰 — 공통 정보 보강 + 용어 통일)
 
@@ -1457,26 +1532,35 @@ BPrN-origin의 거울상(BPuN 발신 → BPrN 앱 체인코드 처리 → 결과
 
 ## 파일 상태 요약
 
+> 2026-06-10 기준 (사용자 직접 리뷰 사이클 반영).
+
 | 파일 | 상태 | 현행 주요 구조 |
 |------|------|---------------|
+| `btip-15.md` | ✅ 신규 (ryan) | BPrN Security Policy Dataset — 동기화 대상 정책 데이터셋 정의 (config 메타데이터, 조직 신원, Signature/ImplicitMeta 정책) |
 | `btip-16.md` | ✅ 수정 완료 | Header: `channel_id`, `chaincode_id`, `tx_id`(bytes), `selector`(bytes). `evtlog_id` 제거. BTIP16 Merkle Tree Appendix |
 | `btip-17.md` | ✅ 수정 완료 | 실패 트랜잭션 리프 null, hashPair 규칙 BTIP16 참조, `Sign(PrivKey, block_height \|\| block_event_root)` |
-| `btip-19.md` | ✅ 수정 완료 | MerkleProof\<Leaf\> (`index` 필드), block_number, mspids, cert_chains, block_commit_sigs, `get_root_ca_and_crl(mspid)` 조직별 조회 |
-| `btip-20.md` | ✅ 수정 완료 | verifyProof, subgraph 다이어그램, sha256, `getRootCAAndCRL(mspid)`, `markProcessed` → `wasDup` 반영 |
-| `btip-21.md` | ✅ 수정 완료 | BTIP21 interface, MerkleProof `index` 필드, `markProcessed` 원자적 호출, `handleLinkerEvent(srcBlockNumber, srcTxIndex, indices, data)` |
-| `btip-22-xx.md` | ⚠️ 미수정 | 조직별 Root CA 매핑 반영 필요 |
-| `btip-23.md` | ✅ 수정 완료 | BTIP23 interface (verifyProof + setPolicyContract), `getCRL(mspid)`, `getRootCAAndCRL(mspid)`, `getEndorsementPolicy()` 구조화 반환 |
-| `btip-24.md` | ✅ 수정 완료 | BTIP24 interface — `markProcessed` returns `bool wasDup` (원자적 check+mark), `cancelNullifier` |
-| `btip-25.md` | ✅ 신규 | TransferEventElems 정의 |
-| `btip-26.md` | ✅ 수정 완료 | BTIP26 interface — `handleLinkerEvent(srcBlockNumber, srcTxIndex, indices, values)`, 이벤트 출처 정보 인용문(gidx 통일) |
-| `btip-27.md` | ✅ 수정 완료 (btip-35 관련 롤백) | BPuN Event Structure — 2단계 머클 트리, leaf 해시 `sha256(value)`, 인덱스 기반 의미 결정. 이벤트 구성은 작성 시점(asyncExecTrxContextOld) 기준, btip-35에서 대체 |
+| `btip-18.md` | ✅ 신규 (ryan) | LinkerPolicy Initialization & Synchronization — `initPolicy`(제네시스, 신뢰 주체 필수) / `syncPolicy`(연속성·오더러 서명·정책 평가·증분 갱신) |
+| `btip-19.md` | ✅ 수정 완료 | `BPrNTxEventProofPayload` — block_number, mspids, cert_chains, block_commit_sigs, `tx_event_root_proof`(구 event_log_root_proof), `get_root_ca_and_crl(mspid)` |
+| `btip-20.md` | ✅ 수정 완료 | verifyProof, subgraph 다이어그램, sha256, `getRootCAAndCRL(mspid)`, markProcessed revert 표현 |
+| `btip-21.md` | ✅ 리뷰 완료 (2026-06-08~09) | `IBTIP21` — Terms 절, `setRegistry`/`onProof(payload, handlerDApp)`/`onResult(payload, handlerDApp)`, `LinkerResult(correlationId, handlerDApp, status)` 3필드, `ErrUntrustedSource`, markProcessed 선행, Rational 절(2PC/결과 분리/Gas 한계/NonReentrant) |
+| `btip-22.md` | ✅ 신규 (ryan) | LinkerPolicy interface on BPuN — `verifyChannelEndorsementPolicy` (인증서 0xff00 → 서명 0x0100 → ImplicitMeta+Signature 정책 평가) |
+| `btip-23.md` | ✅ 리뷰 완료 | `IBTIP23` — `verifyProof` @dev 주석화, Step 2~4는 BTIP22 위임·Step 5~6 직접, `setRegistry` |
+| `btip-24.md` | ✅ 리뷰 완료 | `IBTIP24` — `markProcessed(eventRootHash, handlerDApp)` 내부 `DuplicateProof` revert, `cancelNullifier`, `setRegistry`, @notice/@dev 주석화 |
+| `btip-25.md` | ✅ 리뷰 완료 | `TransferLogElems` — CorrelationId(g4, =tx_event_root 강제)·From(5)·To(6)·Amount(7)·**Beneficiary(8, 신규)**·Memo(9), Go 타입 selector, 10리프→16 null 패딩, Beneficiary 활용 NOTE(EIP-5564 Stealth Address로 From 은닉) |
+| `btip-26.md` | ✅ 리뷰 완료 | 제목 `Application Contract interface on BPuN` — `handleLinkerEvent`/`handleLinkerResult(correlationId, handleCcId, status)`/`cancelLinkerEvent`/`ErrAppLowGas`, 호출자 검증 IMPORTANT, 2PC는 BTIP34 참조+명시 correlationId 차이만 |
+| `btip-27.md` | ✅ 수정 완료 (btip-35 관련 롤백) | BPuN Event Structure — 2단계 머클 트리, leaf 해시 `sha256(value)`, 인덱스 기반 의미 결정 |
 | `btip-28.md` | ✅ 수정 완료 | BPuN Tx/Event Proof — `EventAttrProof` 제거(MerkleProof로 통합), `sha256(leaf)` 리프 해시 |
-| `btip-29.md` | ✅ 수정 완료 | LinkerEndpoint interface on BPrN — MerkleProof 사용, `HandleLinkerEvent(srcChainId, srcBlockNumber, srcTxIndex, indices, values)` 호출 |
-| `btip-31.md` | ✅ 수정 완료 | LinkerVerifier interface on BPrN — `sha256(proof.Leaf)` 리프 재구성 (BTIP23 대응) |
-| `btip-32.md` | ✅ 신규 | LinkerPolicy interface on BPrN — `type BTIP32 interface` (BTIP22 대응) |
-| `btip-33.md` | ✅ 수정 완료 | LinkerNullifier interface on BPrN — `type BTIP33 interface`, `sha256(eventAttrsRoot\|\|chaincodeID)` (BTIP24 대응) |
-| `btip-34.md` | ✅ 수정 완료 | LinkerApp interface on BPrN — `HandleLinkerEvent(srcChainId, srcBlockNumber, srcTxIndex, indices, values)`, 이벤트 출처 정보 인용문 (BTIP26 대응) |
-| `btip-35.md` | ✅ 신규 | BPuN Transaction Event Definition — `"tx"` 4 attrs (type, sender, receiver, amount), `"evm"` 가변 attrs, 이벤트 순서, 실패 tx 처리 |
+| `btip-29.md` | ✅ 리뷰 완료 (2026-06-09) | `IBTIP29` — Terms 절, 타입 `BPuNTxEventProof`, `SetRegistryID`/`OnProof(payload, handlerCcId)`/`OnResult(payload, handlerCcId)`, `LinkerResultElems`(CorrelationId/HandlerCcId/Status 3 elems) 정의 이동, ProofVerifiedEventElems 제거, MarkProcessed 선행 |
+| `btip-31.md` | ✅ 리뷰 완료 | `IBTIP31` — `SetRegistryID`(구 SetLinkerPolicyID) + LinkerRegistry 동적 조회, DPoS 표기 |
+| `btip-32.md` | ✅ 리뷰 완료 | LinkerPolicy interface on BPrN — `IBTIP32`, @dev 주석화, NOTE 블록 정리 (BTIP22 대응) |
+| `btip-33.md` | ✅ 리뷰 완료 | LinkerNullifier interface on BPrN — BTIP24 대비 차이만 기술(diff-only), `ccAppId`, `SetRegistry`(구 SetLinkerEndpointID), `sha256(eventAttrsRoot\|\|ccAppId)` |
+| `btip-34.md` | ✅ 리뷰 완료 (2026-06-09) | 제목 `Application Chaincode interface on BPrN` — `LinkerResultRef{CorrelationIndex, Status}`, `HandleLinkerEvent`/`HandleLinkerResult(correlationId, handlerDApp, status)`/`CancelLinkerEvent`(Admin 전용), **2PC 기본 문서**(예시 시나리오·타임아웃 없음·제출 인센티브·운영 정책), PutState CAUTION 완화 |
+| `btip-35.md` | ✅ 신규 | BPuN Transaction Event Definition — `"tx"` 4 attrs, `"evm"` 가변 attrs, 이벤트 순서, 실패 tx 처리 |
+| `btip-36.md` | ✅ 신규 (Kalix) | EVM Storage Slot Query RPC — `eth_getStorageAt` (EIP-1967 proxy slot 조회) |
+| `btip-37.md` | ✅ 리뷰 완료 (2026-06-09) | `LinkerRegistry interface` — `(uint256 chainId, bytes32 role) → address`, `ErrUnknownContract`/`ErrUnauthorized`, BPrN chainId = `uint256(sha256(channelName + "/BPrN"))`, BPrN 측 string 인터페이스, Trust Anchor 일반화 |
+| `btip-38.md` | ✅ 신규 (ryan) | LinkerPolicy Data Extraction & Block Recording — Orderer가 정책 추출·ABI 인코딩 → 블록 메타데이터 index 6(POLICY) 기록 + 블록 서명 바인딩 (구 철회 번호 재사용) |
+| `btip-39.md` | ✅ 리뷰 완료 (2026-06-10) | BPuN Validator Set Update Proof — Sequential 전용, tendermint-ethaddr 포크 IMPORTANT 노트(해시·주소 파생 상세는 포크 참조로 갈음) |
+| `btip-40.md` | ✅ 리뷰 완료 (2026-06-10) | `TransferLogAttrs` on BPuN — `(correlationId, from, to, amount, beneficiary, memo)` btip-25와 필드 시퀀스 동일, selector `keccak256("TransferLogAttrs(bytes32,address,address,uint256,address,bytes)")`, Per-Event Tree index 매핑 |
 
 ---
 
@@ -1546,9 +1630,14 @@ BPuN → BPrN 방향:
                     ← btip33 (LinkerNullifier)
 
 BPuN ↔ BPrN 대칭 매핑:
-  BTIP21 (LinkerEndpoint on BPuN)    ↔ BTIP29 (LinkerEndpoint on BPrN)
-  BTIP22 (LinkerPolicy on BPuN)     ↔ BTIP32 (ValidatorSetRegistry on BPrN)
+  BTIP21 (LinkerEndpoint on BPuN)   ↔ BTIP29 (LinkerEndpoint on BPrN)
+  BTIP22 (LinkerPolicy on BPuN)     ↔ BTIP32 (LinkerPolicy on BPrN)
   BTIP23 (LinkerVerifier on BPuN)   ↔ BTIP31 (LinkerVerifier on BPrN)
   BTIP24 (LinkerNullifier on BPuN)  ↔ BTIP33 (LinkerNullifier on BPrN)
-  BTIP26 (dApp Interface on BPuN)   ↔ BTIP34 (Chaincode Interface on BPrN)
+  BTIP26 (Application Contract on BPuN) ↔ BTIP34 (Application Chaincode on BPrN)
+  BTIP25 (TransferLogElems on BPrN) ↔ BTIP40 (TransferLogAttrs on BPuN)  ※ 필드 시퀀스 동일, 이름·selector·형식은 체인별 어휘
+  BTIP37 (LinkerRegistry) — 단일 문서 (BPuN Solidity + BPrN string 인터페이스)
+
+LinkerPolicy 스위트 (BPuN 측, ryan):
+  btip15 (무엇을 — 데이터셋) ← btip38 (추출·블록 기록) ← btip18 (주입·동기화) ← btip22 (검증)
 ```
