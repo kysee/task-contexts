@@ -1,6 +1,6 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-06-10 (구현 사이클 1일차 종료) — BTIP 리뷰 사이클 코드 갭 정리 후 **본격 구현 착수**: LinkerRegistry(양 체인) → LinkerPolicy/BPrN → hex 와이어 전환 → LinkerNullifier(양 체인) → LinkerVerifier(양 체인) 순으로 스펙 정합 구현 완료. 아래 §"0. 작업 핸드오프" 절이 현재 상태의 단일 진입점.
+> 마지막 업데이트: 2026-06-10 (구현 사이클 2일차 종료) — **LinkerEndpoint 전면 개정(BTIP-21/29) + btip-21/29/37 스펙 정정 + BPrN role 평문화 + localnet 배포 스크립트 정합 + BTIP26Dapp 호출자 검증**. 아래 §"0. 작업 핸드오프" 절이 현재 상태의 단일 진입점이며, §0.0.1이 세션 후반 작업.
 
 ---
 
@@ -8,7 +8,50 @@
 
 > 노트북 이동 대비 요약. 상세는 각 날짜 절 참조.
 
-### 0.1 오늘 한 일 (2026-06-10, 시간순)
+### 0.0 LinkerEndpoint 전면 개정 (2026-06-10, 2일차 — 최신)
+
+**on-bpun (Solidity)**
+- `IBTIP21.sol` 재작성: `setRegistry` / `onProof(payload, handlerDApp)` / `onResult(payload, handlerDApp)` / `event LinkerResult(bytes32 indexed correlationId, address indexed handlerDApp, uint8 status)` / `error ErrUntrustedSource(address)`. `ProofReceived`/`ProofVerified` 이벤트, `setNullifierContract`/`setVerifierContract` 제거. 구조체는 불변.
+- `IBTIP26.sol`: `handleLinkerResult(bytes32, string, bool)` + `error ErrAppLowGas()` 추가.
+- `LinkerEndpoint.sol` 재작성 (`Ownable` + `ReentrancyGuard`):
+  - `onProof`: registry 조회(`getContract(block.chainid, LINKER_VERIFIER|NULLIFIER)`) → `markProcessed(txEventRoot, handlerDApp)` **선행** → `verifyProof` → try/catch `handleLinkerEvent`(revert=REJECTED, `ErrAppLowGas` 4-byte selector 매칭 시 전체 revert) → `LinkerResult` 정확히 1회 발행(correlationId=`tx_event_root`).
+  - `onResult`: markProcessed → 출처검증(channel_id(gidx:0)→`uint256(sha256(ch||"/BPrN"))` chainId, chaincode_id(gidx:1)→BTIP9 주소 파생, registry의 BPrN LINKER_ENDPOINT와 대조, 불일치 시 `ErrUntrustedSource`) → selector(gidx:3)==`sha256("LinkerResultElems([]byte,string,byte)")` → `verifyProof` → gidx 4/5/6 추출 → `handleLinkerResult(bytes32, string, bool)` (try/catch 없음 — 미스라우팅은 전체 revert로 nullifier 롤백).
+  - ⚠️ **스펙 이탈 1 (보안 정정)**: btip-21 의사코드는 onResult에서 `markProcessed(root, address(this))`(전역 소비)인데, 이러면 permissionless onResult를 "아무거나 수락하는 공격자 dApp"으로 흘려 정당한 dApp의 결과 수신을 영구 차단 가능(griefing). **`(root, handlerDApp)` 단위로 구현** — BTIP-29 BPrN 측과 동일 입도. → btip-21 의사코드 정정 필요.
+- `BTIP26Dapp.sol`: `handleLinkerResult` mock(`LinkerResultReceived` 이벤트) 추가.
+- `deploy.ts`: VERIFIER/NULLIFIER role 등록 + `endpoint.setRegistry` 와이어링으로 교체. `submit-proof.ts`: targetDApp→handlerDApp rename. `LinkerGasTest.t.sol`: 신 구조체명/registry 와이어링으로 수선(forge-std 부재로 미실행).
+
+**on-bprn (Go)**
+- `types/ibtip34.go` 신설: `LinkerResultRef{CorrelationIndex int64, Status bool}` + `IBTIP34` 인터페이스.
+- `types/registry.go`: `ResolveContractOn(ctx, chainName, role)` 추가(크로스체인 키 조회 — OnResult가 `payload.ChainID`로 BPuN endpoint 조회). `ResolveContract`는 위임 thin wrapper화.
+- `linker-endpoint/main.go` 재작성:
+  - `OnProof(ctx, payloadJSON, handlerCcId)`: MarkProcessed **선행**(중복=DuplicateProof, Fabric tx 원자성으로 후속 실패 시 롤백) → VerifyProof → `HandleLinkerEvent` 호출 후 `LinkerResultRef` JSON 수신 → `CorrelationIndex>=0`이면 검증된 attr에서 correlationId 추출 후 `LinkerResultElems` EventLog 발행(elems 3개: CorrelationId/HandlerCcId/Status). `ProofVerifiedEventElems` 발행 **제거**(Fabric 1-event/tx 슬롯을 결과 이벤트에 양보).
+  - `OnResult(ctx, payloadJSON, handlerCcId)`: MarkProcessed 선행(`(event_attrs_root, handlerCcId)` 단위) → 출처검증(`ResolveContractOn(payload.ChainID, LINKER_ENDPOINT)` vs attr0 contractAddress; attr1 topic.0 vs `keccak256("LinkerResult(bytes32,address,uint8)")` — hex 비교는 0x/대소문자 관용) → VerifyProof → attr2(correlationId 32B)/attr3(topic.2 → 하위 20B 주소)/attr4(data status word) 추출 → `HandleLinkerResult` 호출.
+  - ⚠️ **스펙 이탈 2**: btip-29 OnResult 의사코드는 IsProcessed 선검사+verify 후 Mark인데, Fabric 원자성 하에서 동치이므로 OnProof와 동일하게 Mark 선행으로 단순화(InvokeChaincode 1회 절약).
+- `dapp-example/main.go`: `HandleLinkerEvent` → `(LinkerResultRef, error)` 반환(예제는 fire-and-forget `CorrelationIndex=-1`), `HandleLinkerResult` 신설(`RES_`+correlationId hex 키로 `ResultRecord` 저장, 32B/20B 길이 검증, caller=endpoint 검증), `var _ types.IBTIP34` 컴파일 단언.
+
+**스펙 문서 정정 — 완료 (2026-06-10, 사용자 승인 후 docs 리포 반영)**
+1. ✅ btip-21 onResult 의사코드: gidx 4/8/5 → **4/5/6** 정정, `markProcessed(root, address(this))` → **`(root, handlerDApp)`** 보안 정정(per-handler 소비 rationale 주석 포함), 출처검증을 BTIP37/BTIP9 파생 규칙(channel_id→chainId, chaincode_id→주소)으로 구체화, onProof/onResult 단계 번호 중복(2/2, 5/5) 정리.
+2. ✅ LinkerResultElems selector **`LinkerResultElems([]byte,string,byte)`** 통일(btip-21 1곳, btip-29 2곳) + btip-29 표 타입 오타 정정(CorrelationId byte→bytes, Status bytes→byte).
+3. ✅ btip-29 OnResult 의사코드 Mark 선행으로 정정(IsProcessed+후행 Mark 제거, `(event_attrs_root, handlerCcId)` 소비 단위 명시, ChainID 검증 근거 주석, 필드 추출을 value_at_index(2/3/4)로 구체화).
+→ 코드와 스펙 문서 정합 상태. docs 리포 커밋은 미수행(사용자 직접 커밋).
+
+**검증 상태 (2일차)**
+- Solidity: solc 0.8.28(cancun)+OZ 5.6.1 standalone 컴파일 — 컨트랙트 전체(36 파일) **통과**(BTIP26Dapp 호출자 검증 반영 후 재확인). `npx hardhat compile` 정식 실행은 여전히 미수행(환경 제약) — 확인 필요.
+- Go: 툴체인 부재로 컴파일 미수행 — **`cd verifier/on-bprn && go build ./...` 1순위**. 정적 점검(시그니처·import·brace balance)만 완료. role 평문화로 `types.RoleID`/`RoleIDHex` 삭제됨 — 잔존 참조 없음 확인.
+- forge 가스 테스트: 구조체명/registry 와이어링/`dapp.setRegistry` 수선 완료, forge-std 부재로 미실행.
+- localnet end-to-end: 미실행. OnResult의 BTIP35 attr 값 인코딩(0x prefix 유무, topic 대문자) 가정은 관용 비교로 처리했으나 **u2r prover 구현 시 localnet 실데이터로 검증 필요**.
+
+### 0.0.1 세션 후반 작업 (2026-06-10, 운영·스크립트·역할 식별자)
+
+1. **deploy.ts 배포 검증 단계 추가**: 와이어링 후 4개 role을 `registry.getContract(BigInt(config.chainId), role)`로 조회해 배포 주소와 대조, 불일치 시 throw. **핵심 발견: `@beatoz/web3`의 `contract.methods.X().call()`은 반환값을 ABI 디코딩하지 않고 `vm_call` RPC 결과 `{value:{returnData:'0x<raw>'}}`를 그대로 반환** — address는 `returnData` 마지막 20바이트로 직접 디코딩해야 함(`decodeAddressResult`). `config.chainId`(hex, 예: 0xbea700)가 EVM `block.chainid`와 일치해야 검증이 통과(불일치 시 ErrUnknownContract로 표면화).
+2. **배포 순서 변경**: LinkerRegistry가 항상 1순위(사용자 지시). Registry → Endpoint → Nullifier → Verifier → Policy → PolicyVerifier → Dapp.
+3. **LINKER_POLICY 바인딩**: policy(데이터 컨트랙트) 기준 제안이 있었으나 LinkerVerifier가 resolved 주소에 IBTIP22를 직접 호출하는 의존성 때문에 **policyVerifier 유지 결정**("policyVerifier 로 일단 가자") — §0.4 보류 항목 + deploy.ts NOTE 참조.
+4. **bpn-core-2.2 localnet 스크립트 수정** (`scripts/run/3_linker_init.sh`, `4_query_linker_registry.sh`): (a) `SetContract` 인자 순서 `(channel, chaincodeName, role)` 교정, (b) 체인코드별 부트스트랩 메소드명 교정(`SetRegistryID`=endpoint/verifier/BTIP34CC, `SetRegistry`=nullifier), (c) BTIP34CC 부트스트랩 추가, (d) 사용자에 의해 `IS_INIT=""` 처리됨(재실행 시 already-initialized 회피).
+5. **BPrN role 식별자 평문화** (§0.5 컨벤션 참조): btip-37은 **사용자가 직접 개정** — BPrN Roles 표의 식별값은 `"LinkerEndpointRole"` 등 "Role" 접미사 포함 평문. `types.RoleLinker*` 상수 값 = 와이어 값. 코드·스크립트 정합 완료.
+6. **BTIP26Dapp 호출자 검증**(BTIP-26 IMPORTANT 의무): `onlyLinkerEndpoint` modifier(registry 조회로 msg.sender 검증, `ErrUnauthorizedCaller`) + dApp도 registry 단일 보유 전환(`setNullifierContract` 폐기→`setRegistry`, cancel 경로 nullifier도 registry 해석).
+7. **재배포 필요**: linker-registry·linker-endpoint(체인코드), BPuN 컨트랙트 전체(IBTIP21/26 인터페이스 변경). localnet은 네트워크 초기화 후 재실행 권장(이전 실행의 nullifier init 및 hex-role 잔존 데이터).
+
+### 0.1 한 일 (2026-06-10 1일차, 시간순)
 
 1. **문서 후속 정리** (사용자 지시): btips-2pc-design.md §5 재정정(correlationId — BPrN-origin=`tx_event_root` 강제 / BPuN-origin=명시 id 비대칭 회귀), bpun-origin-payment-design.md **§16 신설(PaymentBridge 폐기 — STC 체인코드 기본 기능으로 통합, approve 포함)**, btip-39 버전 v0.34.24 통일, 오탈자 일괄, btip-40 필드 재정합(correlationId 선두 + beneficiary 추가 — btip-25와 시퀀스 대칭 복원), btip-25 Beneficiary NOTE(EIP-5564 **Stealth Address** — "Secure Address" 아님).
 2. **LinkerRegistry 구현** — §"2026-06-10 — LinkerRegistry 구현" 참조. uint256 chainId, Err* 에러, BPrN keccak role(hex 와이어), `setSelfContract` 편의 함수.
@@ -27,14 +70,15 @@
 
 ### 0.3 다음 작업 (우선순위)
 
-1. **(집 도착 직후) 빌드 검증**: on-bprn `go build ./...`, on-bpun `npx hardhat compile`. 깨지면 본문 각 구현 절의 변경 파일 목록으로 추적.
-2. **LinkerEndpoint 전면 개정 (BTIP-21/29)** — 마지막 남은 컴포넌트 갭. on-bpun: Terms/`handlerDApp` rename, `ProofReceived`/`ProofVerified` 이벤트 제거, markProcessed **선행**(현재 코드는 추출→mark→verify 순서로 이미 유사하나 스펙 순서 재확인), `setNullifierContract`/`setVerifierContract` 폐기→`setRegistry`, 2PC(`onResult(payload, handlerDApp)`, `LinkerResult(correlationId, handlerDApp, status)`, try/catch+`IBTIP26.ErrAppLowGas` 분기, nonReentrant). on-bprn: `OnProof/OnResult(ctx, payload, handlerCcId)`, `LinkerResultElems` 3 elems, `ProofVerifiedEventElems` 발행 제거, MarkProcessed 선행.
-3. **BTIP-26/34 콜백 + BTIP-40 표준 이벤트** — BTIP26Dapp/dapp-example에 `handleLinkerResult`/`HandleLinkerResult`, `cancelLinkerEvent` admin 모델, `TransferLogAttrs` 이벤트.
-4. **u2r Prover** (BPuN→BPrN, end-to-end 미싱 피스) — `prover-ts/src/prover/u2r/` 신설. **hex 와이어 기준**. btip39 prover의 header-merkle 재사용.
+1. **(집 도착 직후) 빌드 검증**: on-bprn `go build ./...`, on-bpun `npx hardhat compile`(+`forge build` 가능 시). 깨지면 §0.0 변경 파일 목록으로 추적.
+2. ~~**LinkerEndpoint 전면 개정 (BTIP-21/29)**~~ — **완료 (2026-06-10 2일차, §0.0)**. 스펙 문서 정정 3건도 docs 리포 반영 완료(§0.0 — 커밋만 잔여).
+3. **BTIP-26/34 콜백 + BTIP-40 표준 이벤트** — `handleLinkerResult`/`HandleLinkerResult` 기본형은 §0.0에서 구현됨. BTIP26Dapp registry 기반 호출자 검증(`onlyLinkerEndpoint` modifier) 완료(2026-06-10 — dApp도 registry 단일 보유로 전환: `setNullifierContract` 폐기 → `setRegistry`, deploy.ts/gas test 정합). 잔여: 2PC pending 상태 모델, dapp-example의 `TransferLogAttrs` 처리(`CorrelationIndex=2` 반환 예시).
+4. **u2r Prover** (BPuN→BPrN, end-to-end 미싱 피스) — `prover-ts/src/prover/u2r/` 신설. **hex 와이어 기준**. btip39 prover의 header-merkle 재사용. OnResult가 가정한 BTIP35 attr 인코딩(0x/대소문자)도 여기서 실데이터 검증.
 5. multi-peer block-commit-sig 수집.
 
 ### 0.4 보류/관찰 (사용자 결정 대기 또는 타인 영역)
 
+- **LINKER_POLICY 바인딩 재설계**: registry의 LINKER_POLICY는 현재 LinkerPolicyVerifier(IBTIP22 구현체) 기준 — LinkerVerifier가 그 주소에 IBTIP22를 직접 호출하기 때문. 사용자는 LinkerPolicy(Trust Anchor 데이터 컨트랙트) 기준을 원하나, LinkerPolicy에 verifier getter가 없어(`_policyVerifier` private, 정책 스위트 불가침) 보류("policyVerifier 로 일단 가자" — 2026-06-10). 재바인딩 시 LinkerPolicy getter 추가 + LinkerVerifier 2-hop 조회 필요.
 - **IBTIP22 메소드명 불일치**: btip-22 스펙 `verifyChannelEndorsementPolicy` vs 코드 `verifyChannelEndorsement` — 정책 스위트(ryan 영역) 불가침이라 verifier는 현행 이름 호출. 정합 필요.
 - **결제 이벤트 정의 BTIP** 미작성 (권한 3분기 명문화 선결 조건 — bpun-origin-payment-design §15.9).
 - STC use case 잔존: settle 행선지, approve BPrN/BPuN 동기화 (§10-8 (a)(c) — PaymentBridge 분리 문제는 §16에서 해소).
@@ -43,7 +87,8 @@
 
 - **와이어 byte 값 = hex** (base64 금지): 구조체 필드는 `types.HexBytes`, 최상위 파라미터는 hex string 선언(contractapi raw passthrough 때문). c2c 전용 []byte는 raw 허용.
 - **에러 `Err` prefix** (스펙 정의 에러는 스펙 이름 그대로: `DuplicateProof`, `BlockEventMerkleProofFailed` 등).
-- **모든 컴포넌트는 LinkerRegistry 주소 하나만 보유** — `getContract(block.chainid, LINKER_*)`(BPuN) / `ResolveContract(role)`(BPrN, keccak role hex). 부트스트랩 메소드명: BPuN `setRegistry`, BPrN은 BTIP별로 `SetRegistryID`(endpoint/verifier) vs `SetRegistry`(nullifier).
+- **모든 컴포넌트는 LinkerRegistry 주소 하나만 보유** — `getContract(block.chainid, LINKER_*)`(BPuN) / `ResolveContract(role)`(BPrN). 부트스트랩 메소드명: BPuN `setRegistry`, BPrN은 BTIP별로 `SetRegistryID`(endpoint/verifier) vs `SetRegistry`(nullifier).
+- **role 식별자 체인별 분리 (2026-06-10 사용자 결정, btip-37은 사용자 직접 개정)**: BPuN = `keccak256(roleName)` bytes32(현행 유지), BPrN = **평문 식별 문자열 `"LinkerEndpointRole"` / `"LinkerVerifierRole"` / `"LinkerPolicyRole"` / `"LinkerNullifierRole"`** (btip-37 "BPrN-Specific Considerations" Roles 표가 기준). 두 체인이 동일 식별자 인코딩을 공유할 필요 없음. `types.RoleID`/`RoleIDHex` 삭제, `types.RoleLinker*` 상수 값이 곧 와이어 값, linker-registry 평문 role(+`_` 금지 검증), bpn-core-2.2 스크립트 정합 완료. btip-37 NOTE: onResult/OnResult 출처검증을 위해 **상대 체인 LinkerEndpoint를 자기 체인 LinkerRegistry에 등록**해야 함.
 - 합의-크리티컬 연산은 tendermint-ethaddr 포크 직접 호출, BTIP-32 구조체는 순수 직렬화 경계.
 
 ---

@@ -259,10 +259,22 @@ Verifier(BPrN)는 대상 블록 높이의 BPuN Validator Set을 이미 보유하
 - **btip-39 버전 통일**: Tendermint 버전은 **v0.34.24가 정**(사용자 확인) — IMPORTANT 노트의 v0.34.25 2곳 교정.
 - **오탈자 수정**: btip-21("## Rational"→Rationale, "명배히"→명백히, "값으로 로서", "수신한다.."), btip-25 NOTE 문장 다듬기(+사용자 직접 보강 — Stealth Address 표현), btip-29("이벤틀르"), btip-33("본부서"), btip-34("당사자자", "Rejcted"→`Status` 표현 정리, CAUTION 제목 `Accepted=false`→`Status=false`, CorrelationIndex 경계 "0 이상").
 
+#### ✅ 2026-06-10 후속 정리 3차 — btip-21/29/37 정정 (구현 사이클 2일차, LinkerEndpoint 구현 검증 중 발견)
+
+- **btip-21 onResult 의사코드 정정** (commit `docs: Correct btip-21/29`):
+  - LinkerResultElems 필드 추출 gidx **4/8/5 → 4/5/6** (btip-29 정의 표 기준 — 의사코드가 표와 모순이었음).
+  - **(보안 정정) nullifier 소비 단위** `markProcessed(tx_event_root, address(this))` → **`(tx_event_root, handlerDApp)`** — 전역 소비는 permissionless onResult를 "아무거나 수락하는 공격자 dApp"으로 흘려 정당한 dApp의 결과 수신을 영구 차단하는 griefing 벡터. per-handler 소비(BTIP-29 BPrN 측과 동일 입도)로 정정. 미스라우팅 방어는 handleLinkerResult revert(미지 correlationId) → 전체 revert → mark 롤백.
+  - 출처검증 구체화: 미정의 `BPRN_CHAIN_ID` 상수 제거 → channel_id(gidx:0)·chaincode_id(gidx:1)에서 BTIP37(`uint256(sha256(ch+"/BPrN"))`)·BTIP9(주소 파생) 규칙으로 키 구성. 단계 번호 중복(2/2, 5/5) 정리.
+- **LinkerResultElems selector 표기 통일**: `sha256("LinkerResultElems([]byte,string,byte)")` — btip-29 표(`[]bytes`)·의사코드(`bytes[]`) 혼재 해소, btip-25 Go 표기 관례 적용. 표 타입 오타 정정(CorrelationId byte→bytes, Status bytes→byte).
+- **btip-29 OnResult 정정**: IsProcessed 선검사+후행 Mark → **Mark 선행**(OnProof와 동일 — Fabric tx 원자성 하 동치, InvokeChaincode 1회 절약), 소비 단위 `(event_attrs_root, handlerCcId)` 명시, `payload.ChainID`가 CanonicalVote 서명으로 검증되어 endpoint 조회가 우회 불가하다는 근거 주석, 결과 필드 추출 `value_at_index(2/3/4)`(topic.1/topic.2/data) 구체화.
+- **btip-37 개정 (사용자 직접 재작성, commit `docs: Update btip-37`)**: role 식별자 **체인별 분리** — BPuN은 `keccak256` bytes32 유지, **BPrN은 평문 식별 문자열 `"LinkerEndpointRole"`/`"LinkerVerifierRole"`/`"LinkerPolicyRole"`/`"LinkerNullifierRole"`** (BPrN-Specific Considerations에 별도 Roles 표). 두 체인이 동일 식별자 인코딩을 공유할 필요 없음 — 각 영역 내 식별 기능으로 충분. NOTE 신설: onResult/OnResult 출처검증을 위해 **상대 체인 LinkerEndpoint가 자기 체인 LinkerRegistry에 등록**되어야 함. BPrN 인터페이스 role 타입 `[]byte` → `string`.
+  - 코드·스크립트 정합(같은 날): `types.RoleID`/`RoleIDHex` 삭제, `types.RoleLinker*` 상수 값 = 와이어 값, linker-registry 평문 role(+`_` 금지 검증), bpn-core-2.2 `3_linker_init.sh`/`4_query_linker_registry.sh` — 상세는 `linker-v2.md` §0.0.1.
+
 #### 잔존 관찰 (미처리)
 
-- BTIP 변경의 linker-v2 코드 갭은 `linker-v2.md` §"2026-06-10 — BTIP 리뷰 사이클 코드 갭" 참조.
+- BTIP 변경의 linker-v2 코드 갭은 **해소됨** — 구현 현황·핸드오프는 `linker-v2.md` §0 (2026-06-10 2일차: LinkerEndpoint 전면 개정으로 컴포넌트 갭 종결, 잔여는 u2r prover·BTIP-40 처리·2PC pending 모델).
 - 결제 이벤트 정의 BTIP(권한 3분기·requestedBy 매핑의 명문화 선결 조건)는 미작성 — `bpun-origin-payment-design.md` §15.9.
+- btip-22 메소드명(`verifyChannelEndorsementPolicy`) vs 코드(`verifyChannelEndorsement`) 불일치, BPrN 부트스트랩 메소드명 혼재(`SetRegistryID` vs `SetRegistry`) — 정합 필요.
 
 ### 2026-06-02 (문서 리뷰 — 공통 정보 보강 + 용어 통일)
 
