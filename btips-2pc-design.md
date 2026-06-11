@@ -67,10 +67,12 @@ related: ./btips.md
 
 > **2026-06-01 정정**: 본 결정의 *최초 형태*(BPrN-origin은 `tx_event_root` 내재값 / BPuN-origin은 명시 id, 방향별 비대칭)가 §6 D-A에 정당화되어 있었으나, BTIP-25/40 작업에서 *양 체인 모두 명시 id로 통일*로 재결정됐었다.
 >
-> **2026-06-10 재정정**: 2026-06-05~10 사용자 직접 리뷰에서 **방향별 비대칭으로 회귀**. 단 최초 형태와 달리 BPrN-origin도 *명시 필드*(BTIP-25 `CorrelationId`, gidx:4)는 유지하며, 그 **값을 무조건 `tx_event_root`로 강제**한다(BTIP-25/21/34). 본 절은 현재 결정을 기술한다.
+> **2026-06-10 재정정**: 2026-06-05~10 사용자 직접 리뷰에서 **방향별 비대칭으로 회귀**. 단 최초 형태와 달리 BPrN-origin도 *명시 필드*(BTIP-25 `CorrelationId`, gidx:4)는 유지하며, 그 **값을 무조건 `tx_event_root`로 강제**한다(BTIP-25/21/34). ~~본 절은 현재 결정을 기술한다.~~
+>
+> **2026-06-11 재정정 (명시 필드 폐지 — 최초 형태로 완전 회귀)**: "필드에 `tx_event_root`를 싣는다"는 06-10 형태가 **해시 고정점이라 성립 불가**임이 구현 중 발견됨 — CorrelationId(gidx:4)는 머클 트리의 리프인데 값이 그 트리의 root여야 하기 때문. 프로토콜은 어차피 gidx:4를 읽지 않고(btip-21 onProof는 증명된 root를 직접 사용), 죽은 필드를 대칭성 명목으로 남기지 않기로 결정(사용자). → **BTIP-25에서 CorrelationId 필드 제거**(9-leaf: From=4, To=5, Amount=6, Beneficiary=7, Memo=8; selector도 5-인자로 변경). 매칭 식별자는 요청 이벤트의 `tx_event_root` **내재값 그대로**(필드 없음) — §6 D-A 최초 형태와 동일. 본 절은 이 현재 결정을 기술한다.
 
 - **무엇**: 보류(잠금)상태 키 = `LinkerResult.correlationId`.
-  - **BPrN-origin**: 발신 ccApp이 명시 필드(BTIP-25 `TransferLogElems.CorrelationId`, gidx:4)에 싣되, 값은 **무조건 요청의 `tx_event_root`** (BTIP-25 정의 + BTIP-21 Rational + BTIP-34 강제). [BTIP-24](BTIPS) Nullifier 기준값과 동일하므로 요청-결과 양단을 모호함 없이 연결.
+  - **BPrN-origin**: 명시 필드 없음. correlationId = **요청 이벤트의 `tx_event_root` 내재값**(BTIP-25 NOTE + BTIP-21 Rational + BTIP-34 강제) — 검증자(LinkerEndpoint/BPuN)는 증명에서 직접 추출하고, 발신 ccApp은 BTIP-16 규칙으로 emit 시점에 직접 계산해 보류상태 키로 사용. [BTIP-24](BTIPS) Nullifier 기준값과 동일하므로 요청-결과 양단을 모호함 없이 연결.
   - **BPuN-origin**: **발신 dApp이 자기 컨트랙트 안에서 유일하도록 정한 명시 id**(예: 단조 증가 nonce. 오사용 예방 차원에서 전역 유일 생성 권장 — BTIP-26). BTIP-40 `TransferLogAttrs(bytes32 indexed correlationId, ...)`.
 - **의도/검증**:
   - **lock 시점 결정 가능** ✅: BPrN ccApp은 `tx_event_root`를 BTIP16 규칙으로 emit 시점에 직접 계산 가능(입력이 모두 실행 시점에 가용, 노드 포맷 결합 없음). BPuN dApp은 자기 상태(nonce)로 결정.
@@ -128,13 +130,15 @@ BPrN-origin의 거울상(결제·요청이 BPuN에서 발생 → BPrN 앱 체인
 
 ### 핵심 결정과 의도
 
-**D-A. correlationId 출처의 방향별 비대칭** (2026-06-10 재채택)
+**D-A. correlationId 출처의 방향별 비대칭** (2026-06-10 재채택, 2026-06-11 최초 형태로 확정)
 
 > **2026-06-01 정정**: 본 방향별 비대칭은 폐기. 양 체인 모두 *발신자 정한 명시 id로 통일*.
 >
 > **2026-06-10 재정정**: 사용자 직접 리뷰로 **비대칭 모델 재채택** (§5 갱신본이 현행). BPrN-origin = `tx_event_root` 강제(단, 명시 필드 CorrelationId에 실어 보냄), BPuN-origin = 명시 id. 아래 원래 논거 중 *node-format 결합*은 BPuN에만 적용된다는 점이 재확인된 셈.
+>
+> **2026-06-11 재정정**: "명시 필드에 싣는" 형태는 해시 고정점이라 성립 불가(리프 값 = 그 트리의 root) → **필드 자체를 제거**하고 내재값 그대로 사용 — 본 결정의 *최초 형태*가 그대로 확정됨. §5의 2026-06-11 재정정 참조.
 
-- BPrN-origin: `tx_event_root`(**내재값** — EP가 증명에서 공짜로 가짐, 발신 체인코드가 BTIP16으로 계산 가능). ~~→ 명시 id로 변경(2026-06-01)~~ → **2026-06-10 `tx_event_root` 강제로 회귀** (명시 필드 BTIP-25 `CorrelationId`에 싣는 형태)
+- BPrN-origin: `tx_event_root`(**내재값** — EP가 증명에서 공짜로 가짐, 발신 체인코드가 BTIP16으로 계산 가능). ~~→ 명시 id로 변경(2026-06-01)~~ → ~~2026-06-10 명시 필드에 싣는 형태로 회귀~~ → **2026-06-11 필드 제거, 내재값 그대로 (최초 형태 확정)**
 - BPuN-origin: **발신 컨트랙트가 정한 명시 id**(nonce). 이유 — BPuN(EVM) 발신 컨트랙트가 event_attrs_root를 lock 시점에 계산하려면 beatoz-go `evmLogsToEvent` 인코딩(소문자 주소/대문자 topic/10진수 blockNumber/data 생략/순서)에 **강결합**되어 노드 포맷 변경 시 모든 컨트랙트가 깨짐. 그 결합을 피하려 명시 id 채택. → **양 체인에 동일 근거로 적용, 비대칭 폐기.**
 - **검증 완료**: `evmLogsToEvent`([ctrler.go:339](~/go/src/github.com/beatoz/beatoz-go/ctrlers/vm/evm/ctrler.go)) 확인 — contractAddress=`address(this)`, topics/data=컨트랙트 생성, blockNumber=`block.number`(=l.BlockNumber), removed=항상 `"false"`(BFT 즉시완결+emit시점). 즉 계산은 *가능*하나 결합 위험 때문에 명시 id 선택.
 - correlationId(매칭)와 Nullifier(재생방지)는 **분리** — Nullifier는 여전히 tx_event_root/event_attrs_root 기준. *(이 명제는 양 체인 통일 후에도 유지)*

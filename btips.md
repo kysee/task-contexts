@@ -1558,7 +1558,7 @@ BPrN-origin의 거울상(BPuN 발신 → BPrN 앱 체인코드 처리 → 결과
 | `btip-22.md` | ✅ 신규 (ryan) | LinkerPolicy interface on BPuN — `verifyChannelEndorsementPolicy` (인증서 0xff00 → 서명 0x0100 → ImplicitMeta+Signature 정책 평가) |
 | `btip-23.md` | ✅ 리뷰 완료 | `IBTIP23` — `verifyProof` @dev 주석화, Step 2~4는 BTIP22 위임·Step 5~6 직접, `setRegistry` |
 | `btip-24.md` | ✅ 리뷰 완료 | `IBTIP24` — `markProcessed(eventRootHash, handlerDApp)` 내부 `DuplicateProof` revert, `cancelNullifier`, `setRegistry`, @notice/@dev 주석화 |
-| `btip-25.md` | ✅ 리뷰 완료 | `TransferLogElems` — CorrelationId(g4, =tx_event_root 강제)·From(5)·To(6)·Amount(7)·**Beneficiary(8, 신규)**·Memo(9), Go 타입 selector, 10리프→16 null 패딩, Beneficiary 활용 NOTE(EIP-5564 Stealth Address로 From 은닉) |
+| `btip-25.md` | ✅ 개정 (2026-06-11) | `TransferLogElems` — **CorrelationId 필드 제거**(해시 고정점 불가 발견, 매칭 식별자는 tx_event_root 내재값 — NOTE 신설): From(4)·To(5)·Amount(6)·**Beneficiary(7)**·Memo(8), selector 5-인자, 9리프→16 null 패딩, Beneficiary 활용 NOTE(EIP-5564 Stealth Address로 From 은닉) |
 | `btip-26.md` | ✅ 리뷰 완료 | 제목 `Application Contract interface on BPuN` — `handleLinkerEvent`/`handleLinkerResult(correlationId, handleCcId, status)`/`cancelLinkerEvent`/`ErrAppLowGas`, 호출자 검증 IMPORTANT, 2PC는 BTIP34 참조+명시 correlationId 차이만 |
 | `btip-27.md` | ✅ 수정 완료 (btip-35 관련 롤백) | BPuN Event Structure — 2단계 머클 트리, leaf 해시 `sha256(value)`, 인덱스 기반 의미 결정 |
 | `btip-28.md` | ✅ 수정 완료 | BPuN Tx/Event Proof — `EventAttrProof` 제거(MerkleProof로 통합), `sha256(leaf)` 리프 해시 |
@@ -1572,7 +1572,7 @@ BPrN-origin의 거울상(BPuN 발신 → BPrN 앱 체인코드 처리 → 결과
 | `btip-37.md` | ✅ 리뷰 완료 (2026-06-09) | `LinkerRegistry interface` — `(uint256 chainId, bytes32 role) → address`, `ErrUnknownContract`/`ErrUnauthorized`, BPrN chainId = `uint256(sha256(channelName + "/BPrN"))`, BPrN 측 string 인터페이스, Trust Anchor 일반화 |
 | `btip-38.md` | ✅ 신규 (ryan) | LinkerPolicy Data Extraction & Block Recording — Orderer가 정책 추출·ABI 인코딩 → 블록 메타데이터 index 6(POLICY) 기록 + 블록 서명 바인딩 (구 철회 번호 재사용) |
 | `btip-39.md` | ✅ 리뷰 완료 (2026-06-10) | BPuN Validator Set Update Proof — Sequential 전용, tendermint-ethaddr 포크 IMPORTANT 노트(해시·주소 파생 상세는 포크 참조로 갈음) |
-| `btip-40.md` | ✅ 리뷰 완료 (2026-06-10) | `TransferLogAttrs` on BPuN — `(correlationId, from, to, amount, beneficiary, memo)` btip-25와 필드 시퀀스 동일, selector `keccak256("TransferLogAttrs(bytes32,address,address,uint256,address,bytes)")`, Per-Event Tree index 매핑 |
+| `btip-40.md` | ✅ 개정 (2026-06-11) | `TransferLogAttrs` on BPuN — `(correlationId, from, to, amount, beneficiary, memo)`, btip-25와는 **자산 전송 필드만 동일**(correlationId는 BPuN-origin 전용 — BPrN-origin은 tx_event_root 내재값), selector `keccak256("TransferLogAttrs(bytes32,address,address,uint256,address,bytes)")`, Per-Event Tree index 매핑 |
 
 ---
 
