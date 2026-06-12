@@ -1,10 +1,143 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-06-11(세션 후반) — **ccApp/BPrN STC 모형(`stc-example`) 신설 + BPrN 이벤트 와이어 관례 정합(bprn-sdk-go 재사용) + BTIP-25 CorrelationId 필드 제거 적용(⚠️ 유지/롤백 사용자 컨펌 대기)**. 직전 상태는 아래 §"2026-06-11 — ccApp/BPrN STC 모형" → §"BTIP26Token" → §"btip39 sync 데몬" → §0(2026-06-10 핸드오프) 순으로 읽기. **상시 규칙: 모든 수정은 사용자 명시 컨펌 후에만(§세션 논의 기록).**
+> 마지막 업데이트: 2026-06-12 (세션 종료 시점) — **아래 §00(2026-06-12 종합 핸드오프)부터 읽기.** 상세는 날짜별 절, 직전 기준선은 §0(2026-06-10).
 
 ---
 
-## 2026-06-11 — ccApp/BPrN STC 모형 (`verifier/on-bprn/stc-example/`) + BPrN 이벤트 와이어 관례 정합
+## 00. 종합 핸드오프 (2026-06-12 세션 종료 — 여기서부터 이어서 읽기)
+
+### 00.1 상시 작업 규칙 (사용자 지시, 세션 불문 적용)
+
+1. **모든 파일 수정은 사용자의 명시적 컨펌 후에만 시작한다.** 의견 질문("~해야 해?")은 수정 지시가 아니다. 분석/의견 제시 → "수정할까요?" → 명확한 승인 → 편집.
+2. README 등 **사용 문서는 역할+usage만** — 내부 설계·신뢰 경로·타 모듈 대응 관계 서술 금지. 문장은 짧고 군더더기 없이("~만", "자동", 노트식 표기 금지). 예외: 모르면 실사용이 깨지는 주의사항(int64 정밀도 등).
+3. BTIP 스펙·설계 문서는 사용자가 직접 관리 — 모순 발견 시 보고와 해소안 제시까지만.
+
+### 00.2 현재 시스템 전체 그림 (구현 완료 상태)
+
+**컴포넌트** (모두 구현됨, localnet e2e만 미실시):
+
+| 위치 | 컴포넌트 | 상태 |
+|---|---|---|
+| BPuN (on-bpun) | LinkerRegistry·Endpoint·Nullifier·Verifier·Policy(+PolicyVerifier)·**BTIP26Token**(NFT 브리지 dApp 샘플) | solc 전체 컴파일 OK |
+| BPrN (on-bprn) | linker-registry·endpoint·nullifier·verifier·policy·**btip34-ccapp**(STC 모형 ccApp, 구 stc-example)·dapp-example(최소 예제) | ⏳ `go build ./...` 로컬 미검증 (샌드박스 Go 없음) |
+| prover-ts | **btip39-u2r-policy**(validator set sync 데몬), **btip28-u2r-txevt**(BPuN→BPrN tx/event), **btip19-r2u-txevt**(BPrN→BPuN tx/event), **common/** | tsc 0 에러 + 단위 자가시험 통과. btip39는 localnet e2e도 통과(06-11) |
+
+**prover 명명 규칙**: 디렉토리 = `btipXX-{r2u|u2r}-{policy|txevt}`, XX = 생성하는 증명 페이로드의 BTIP 번호 (btip19=BPrNTxEventProof→btip-21 onProof/onResult, btip28=BPuNTxEventProof→btip-29 OnProof/OnResult).
+
+**prover 실행** (모두 `prover-ts/`에서, env는 `.env`):
+
+```
+npm run btip39:sync                 # validator set 동기화 데몬
+npm run btip28:cli -- <txHash> [--to-ccapp <cc명>] [--on-result] [--event-index N] [--attrs ...] [--out f]
+npm run btip28:api                  # :3028, GET /proof(생성) POST /proof(생성+제출, to_ccapp)
+npm run btip19:cli -- <txId>   [--to-dapp <0xaddr>] [--on-result] [--channel ch] [--attrs gidx...] [--out f]
+npm run btip19:api                  # :3019, GET /proof(생성) POST /proof(생성+제출, to_dapp)
+```
+
+2PC 결과증명 방향 주의: BPrN LinkerResultElems→BPuN은 **btip19 --on-result**, BPuN LinkerResult→BPrN은 **btip28 --on-result**.
+
+**src/ 구조** (2026-06-12 재편 — "자체 완결" 원칙은 사용자 지시로 폐기, 공용화):
+
+```
+src/common/   btip16-merkle.ts(BTIP-16 트리) tm-merkle.ts(Tendermint RFC6962+cdcEncode, idx8/idx11 빌더)
+              event-log.ts(EventLog+DER) rpc.ts(Tendermint RPC 전체) fabric.ts(FabricClient: Gateway·
+              resolveContractByRole·qscc 블록조회·EndorserTx 파싱·커밋서명) env.ts go-json.ts
+src/btip{19,28,39}-*/   cli.ts/server.ts(btip39는 main.ts)/config.ts/submitter.ts/tx-event-proof.ts/types.ts/README.md
+잔재: src/app.module.ts·src/main.ts (구 NestJS 골격, app.module은 깨진 import — 정리 미지시)
+```
+
+**crypto 자료**: `prover-ts/bprn-organizations/localnet/`(네트워크별 디렉토리) — bpn-core-2.2/bprn-test-env로의 파일 단위 심볼릭 링크 + connection-profile.json. 재생성: `scripts/link-bprn-test-env.sh`. `.env`의 FABRIC_* 경로도 localnet/ 기준.
+
+### 00.3 오늘 확정된 설계 결정
+
+1. **BTIP-25 CorrelationId 필드 제거 확정** (해시 고정점 불가 발견 → 사용자 컨펌): TransferLogElems = 9-leaf(From=4, To=5, Amount=6, Beneficiary=7, Memo=8), selector = `sha256("TransferLogElems([]byte,[]byte,[]byte,[]byte,[]byte)")` (5-인자 — 구 6-인자 해시 무효). BPrN-origin correlationId = 요청 이벤트의 **tx_event_root 내재값**(필드 없음). D안(명시 id) 배제 근거 = dApp revert 시 correlationIndex 유실로 REJECTED 결과 발행 불가(D-B 충돌). btip-25/40·2pc-design·BTIP26Token.sol·btip34-ccapp 모두 반영됨.
+2. **tendermint-ethaddr = 바닐라 v0.34 + 주소 유도(keccak)만 변경** (사용자 확인) → LastResultsHash 의미(블록 H 결과→헤더 H+1), deterministic DeliverTx(Code/Data/GasWanted/GasUsed, Events 미포함) 모두 바닐라 기준으로 확정 추론 가능.
+3. **BPrN 이벤트 와이어 관례** (bpn-core 실물 확인): `SetEvent(hex(selector), DER(elems))`, 피어가 Header 재구성+root 계산. bprn-sdk-go `chaincodes/event` v0.10.2가 정본(on-bprn에 vendor됨). protobuf emit은 증명 불가 — linker-endpoint 수정 완료.
+
+### 00.4 다음 작업 (우선순위)
+
+1. **on-bprn `go build ./...` 로컬 검증** (vendor 정합·btip34-ccapp 포함) — 유일한 빌드 미검증.
+2. **localnet e2e** (§"2026-06-12 — btip28" e2e 절차 참조): ① 체인코드 배포+부트스트랩(btip34-ccapp: SetRegistryID/SetSelfCcName/SetTrustedDApp/Mint; BPuN: deploy.ts `<chain> bpn <STC cc명>`로 setPaymentSource) ② u2r: burn-nft.ts → btip28:cli --to-ccapp ③ r2u: btip34-ccapp.PayToBPuN → btip19:cli --to-dapp ④ 양방향 2PC 완결(--on-result 교차).
+3. e2e 관전 포인트: BTIP-35 attr 실데이터 형식(topic 대문자/0x 유무 — endpoint attrHex32At·btip34-ccapp hexEqual 가정), IsBTIP27 활성 높이, btip19 ABI·@beatoz/web3 제출 경로 첫 실행.
+4. 보류: multi-peer commit-sig, IBTIP22 메소드명(ryan 영역), LINKER_POLICY 바인딩 재설계, 3_linker_update_vs.sh stale.
+
+### 00.5 git 상태 주의 (이 세션이 남긴 워킹 트리)
+
+`git mv`(리네임=staged)와 sed(내용 수정=unstaged)가 섞여 같은 파일이 R+M으로 양쪽에 보임. **커밋 전 `git add -A`로 전부 스테이징해서 한 커밋으로 묶을 것** — 지금 그대로 commit하면 staged 절반만 들어감. 마지막 커밋: 4d19cff(btip28). 미커밋: btip19 모듈, 디렉토리 재편(공용화·리네임), bprn-organizations/localnet, on-bprn(endpoint 수정·btip34-ccapp·vendor·9-leaf), on-bpun(BTIP26Token gidx·deploy.ts·burn-nft.ts), BTIPs(btip-25/40), task-contexts.
+
+---
+
+---
+
+## 2026-06-12 — prover-ts 디렉토리 재편 (사용자 지시)
+
+- **bprn-organizations 재배치 (후속 사용자 지시)**: `prover-ts/bprn-organizations/*` 전부를 **`bprn-organizations/localnet/`** 하위로 이동(connection-profile.json + peer/orderer crypto 심볼릭 링크). 경로 참조 일괄 수정: `.env`(FABRIC_CONNECTION_PROFILE/CERT_PATH/KEY_PATH), `.env.example`, `scripts/link-bprn-test-env.sh`(DST), connection-profile.json 내부 tlsCACerts 절대경로. 심볼릭 링크 대상은 bpn-core-2.2 절대경로라 이동 무영향(링크 생존 확인). 네트워크별 디렉토리(localnet/...) 구조의 시작.
+
+
+- **삭제**: `src/fabric/`, `src/prover/`(잔재) — 구 NestJS r2u prover 골격. 어느 btip 모듈도 참조하지 않음을 확인 후 제거. package.json `btip39:scan`(삭제된 src/prover/btip39 대상) 스크립트도 제거.
+- **리네임** (`btipxx-{r2u|u2r}-{policy|txevt}` 형식): `src/btip19` → **`btip19-r2u-txevt`**, `src/btip28` → **`btip28-u2r-txevt`**, `src/btip39` → **`btip39-u2r-policy`**. npm 스크립트 경로 갱신(스크립트 이름은 btip19:cli 등 유지), 내부 주석·Usage 문자열의 구 경로 갱신. 3개 모듈 일괄 tsc 0 에러.
+- **공용 모듈화 (후속 사용자 지시)**: "자체 완결(모듈 간 의존 0)" 원칙을 **사용자 지시로 폐기**하고 공통 로직을 `src/common/`으로 추출. 구성:
+  - `common/btip16-merkle.ts`(구 merkle.ts — 2026-06-12 사용자 지시 리네임)·`event-log.ts`, `common/rpc.ts`(btip39+btip28 병합 — status/block/commit/validators/tx/blockResults), `common/tm-merkle.ts`(구 header-merkle.ts — Tendermint 규격: RFC6962 트리+cdcEncode, NextValidatorsHash(8)·LastResultsHash(11) 빌더 모두), `common/fabric.ts`(FabricClient: Gateway 접속·getContract·**resolveContractByRole**(registry 단일 출처)·qscc 블록 조회·EndorserTx 파싱·커밋서명 추출 + blockNumberOf), `common/env.ts`(required·loadFabricEnv·loadBpunRpcUrl), `common/go-json.ts`(goJsonStringify).
+  - 모듈별 변화: btip39(rpc/header-merkle 삭제, submitter·config를 FabricClient/공용 env 기반으로 재작성), btip28(rpc/header-merkle/btip16-merkle 삭제 — 트리는 common/merkle.ts 사용으로 재작성, submitter·config 동일 처리), btip19(merkle/event-log/fabric 삭제 — 전부 common 사용). 각 모듈 config는 `FabricConnectionConfig`를 extends.
+  - 검증: common+3모듈 일괄 tsc 0 에러, 기능 자가시험 재통과(2단계 이벤트 트리·proto 벡터·EventLog 증명 — 공용 모듈 경유).
+- ⚠️ 잔재: `src/app.module.ts`(삭제된 ./prover/prover.module import — 기존부터 깨져 있던 NestJS 골격)·`src/main.ts` — 지시 범위 밖이라 미정리. 전체 tsc는 app.module.ts 1건 에러(모듈·common tsc는 전부 0).
+
+---
+
+## 2026-06-12 — btip19 r2u tx/event prover (`prover-ts/src/btip19/`)
+
+> 사용자 명시 지시: "btip19 구현해. btip28과 동일한 기능과 범위로." — r2u 페이로드는 BTIP-19 `BPrNTxEventProof`(사용자 확인), 제출 인터페이스는 BTIP-21(LinkerEndpoint/BPuN `onProof`/`onResult`). `src/btip19/`는 타 개발자 리팩토링이 비워둔 자리(구 src/prover 삭제됨)에 신규 구현.
+
+### 구성 (btip28과 동일 패턴, 자체 완결)
+
+- **`btip19:cli`** (`cli.ts`): `<txId> [--channel] [--attrs i,j,k(gidx)] [--to-dapp 0x...] [--on-result] [--out]` — 항상 stdout에 증명 출력, `--to-dapp` 시 BPuN LinkerEndpoint로 제출(onProof/onResult). 제출 메시지는 stderr.
+- **`btip19:api`** (`server.ts`, 기본 포트 3019): GET /proof(생성) / POST /proof(생성+제출, `to_dapp` 필수, `on_result?`) / GET /health. Fabric gateway는 lazy 연결 후 재사용.
+- **빌더** (`tx-event-proof.ts`): 구 prover.service.ts 로직 이식 — qscc GetBlockByTxID → 블록 1회 순회로 BTIP-17 leaves(실패/무이벤트 tx = null leaf) + 대상 EventLog(DER elems, hex tx_id/event_name 디코딩) → block_event_root·증명 생성. **모든 증명을 로컬 verifyMerkleProof로 자가검증 후 발행**(구 코드엔 없던 추가). cert PEM→DER, commit sig DER→r||s 64B(메타데이터 index env, 기본 5). null sibling = **ZERO_HASH 센티넬**(Solidity 검증자 와이어 — btip28의 JSON null과 다름, 방향별 검증자 관례 차이).
+- **제출기** (`submitter.ts`): **@beatoz/web3 의존 추가**(prover-ts package.json). LinkerEndpoint 주소는 BPUN_LINKER_REGISTRY에서 `getContract(chainId, keccak256("LinkerEndpoint"))`로 해석(레지스트리 단일 출처; `.call()` raw returnData에서 주소 추출 — deploy.ts와 동일 패턴). **ABI 프래그먼트를 artifacts의 LinkerEndpoint.json과 대조 검증 완료**(필드명·타입·순서 일치).
+- **자체 완결 복사**: merkle.ts·event-log.ts(src/common에서), fabric.ts(구 fabric.service.ts의 NestJS 제거 포트 — qscc 조회·EndorserTx 파싱·커밋서명 추출).
+- env: 생성 = FABRIC_*(6종)+FABRIC_COMMIT_SIG_METADATA_INDEX(5) / 제출 = BPUN_RPC_URL·BPUN_CHAIN_ID·BPUN_PRIVATE_KEY·BPUN_LINKER_REGISTRY·BPUN_SUBMIT_GAS(5M).
+- 검증: btip19 단독 tsc 0 에러. 단위 자가시험 통과 — DER 인코더/디코더 왕복, 9-leaf TransferLogElems 형상(leavesLen=9), 전체 gidx 증명 검증, BTIP-17 null leaf 블록 트리 증명. README는 역할+usage 형식.
+- e2e 미실시(localnet 필요): r2u 본류(btip34-ccapp.PayToBPuN → btip19:cli --to-dapp BTIP26Token) + 2PC 완결(LinkerResultElems → --on-result는 btip28이 담당... 주의: **r2u 결과증명(BPuN LinkerResult)을 BPrN으로 보내는 건 btip28 --on-result**, **u2r 결과증명(BPrN LinkerResultElems)을 BPuN으로 보내는 건 btip19 --on-result**).
+
+---
+
+## 2026-06-12 — btip28 u2r tx/event prover (`prover-ts/src/btip28/`) + btip34-ccapp 리네임
+
+> 사용자 명시 지시 2건: ① `stc-example` → **`btip34-ccapp`** 디렉토리·내부 명칭 일괄 변경(완료). ② **btip28 prover를 `prover-ts/src/btip28/`에 자체 완결로 구현**(btip39와 동일 원칙 — 타 모듈 의존성 0, rpc/header-merkle은 btip39에서 복사 격리).
+>
+> 용어 정리(사용자 확인): btip39 데몬 = **u2r policy prover**(validator set 동기화 채널), 본 모듈 = **u2r tx/event prover** — 증명 페이로드는 BTIP-28(`BPuNTxEventProof`), 제출 인터페이스는 BTIP-29(OnProof/OnResult).
+
+### 신뢰 경로와 구현 (BTIP-28 검증 파이프라인 = linker-verifier가 정본)
+
+- 경로: commit sigs(GetValidatorSet(height)로 대조) → block_hash → **헤더 트리 idx 11** cdcEncode(LastResultsHash) → ABCIResults 트리(deterministic DeliverTx) → **tx_event_root = DeliverTx.Data**(beatoz-go node/app.go가 `txctx.EventRoot()` 결과를 Data에 기록 — 확인함) → Tx Event Tree(preHashed) → Per-Event Tree(sha256(attr.Value)).
+- **anchor 높이 적응 해석**: Tendermint v0.34는 블록 H의 결과를 **헤더 H+1**의 LastResultsHash에 커밋 → prover는 deterministic results root를 직접 재구성해 헤더 H+1·H 양쪽과 대조, 일치하는 쪽을 `payload.height`(anchor)로 채택(H+1 미생성 시 1초 간격 재시도). 포크가 의미를 바꿨어도 자동 적응; 어느 쪽도 불일치면 "deterministic 인코딩 발산" 에러로 정지.
+- **deterministic DeliverTx 인코딩**: protobuf {Code=1, Data=2, GasWanted=5, GasUsed=6}(영값 생략, 비결정 필드 제외 — btip-28 §tx_result_proof). 알려진 벡터로 단위검증 통과. ~~⚠️ 포크가 results 해싱에 Events를 포함했을 가능성~~ → **해소(2026-06-12 사용자 확인): tendermint-ethaddr는 주소 유도 공식만 변경, 그 외 바닐라 v0.34와 동일.** 따라서 LastResultsHash 의미(블록 H 결과 → 헤더 H+1)와 deterministic 인코딩(Events 미포함)은 바닐라 그대로이고, anchor는 항상 H+1로 귀결(양쪽 대조 로직은 방어적 자가검증으로 유지).
+- **BTIP-27 이벤트 트리**: beatoz-go `eventRootBTIP27`(per-event: sha256(attr.Value) leaves / tx-level: preHashed roots, beatoz-go types/merkle == bprn-sdk-go merkle 동일 구현 diff 확인) 미러 `btip16-merkle.ts` — 1-indexed 배열 트리, null 패딩, hashPair(nil,nil)=nil. **siblings의 null은 JSON null로 전송**(Go HexBytes null→nil, VerifyMerkleProof hashPair(current,nil) 처리).
+- **3중 자가 검증**(불일치 시 페이로드 미발행): ① results root == anchor 헤더 LastResultsHash ② 헤더 14-leaf 재구성 root == block_id.hash ③ 재계산 tx_event_root == DeliverTx.Data.
+- **단위 자가시험 통과**: BTIP-16 증명을 Go 검증자 워크 미러로 검증(n=1~13, raw/preHashed, null sibling 포함), 2단계 합성, proto 벡터, RFC6962(n=1~12). `tsc --noEmit` 전체 통과.
+
+### 파일 (`prover-ts/src/btip28/` — 자체 완결)
+
+- `main.ts`: CLI — `ts-node src/btip28/main.ts <txHash> <handlerCcId> [--on-result] [--event-index N] [--attrs i,j,k] [--dry-run] [--out path]`. 이벤트 기본 선택 = 유일한 "evm" 이벤트(복수면 목록 출력 후 인덱스 요구), attrs 기본 = 전체. npm script: **`btip28:prove`**.
+- `server.ts` (2026-06-12 사용자 지시 추가): **증명 생성 HTTP API** — Node 내장 http(의존성 0), npm script **`btip28:api`**, 포트 `BTIP28_API_PORT`(기본 3028), Fabric 설정 불필요(생성 전용). `POST /proof` {tx_hash, event_index?, attr_indices?} → {tx_height/tx_index/event_index/event_type/attr_indices/tx_event_root/event_attrs_root, **payload**(=OnProof/OnResult용 payloadJSON)}. 응답 전체를 goJsonStringify로 직렬화 — **timestamp(int64) bare 리터럴이라 일반 JSON.parse→stringify 재인코딩 금지**(README CAUTION 명시). 형식 오류=400 / 노드·자가검증 실패=502. `GET /health`.
+- `README.md` (사용자 지시 추가): 역할+usage만 — 2회 질책 후 축소(신뢰 경로·자가검증·btip39 대응·파일 표·콜백 메소드명 전부 제거, --on-result 판단 기준은 옵션 행 한 줄). int64 CAUTION만 유지(모르면 실사용이 깨지므로).
+- **진입점 재편(2026-06-12 사용자 지시, 최종)**: `main.ts`(btip28:prove) **삭제** — 진입점은 2개로 정리.
+  - **`btip28:cli`** (`cli.ts`): `<txHash> [--to-ccapp <name>] [--on-result] [--event-index N] [--attrs i,j,k] [--out path]` — 항상 stdout에 증명 출력(GET 응답과 동일 형식, goJsonStringify), **`--to-ccapp` 지정 시 출력 + 해당 ccApp으로 자동 제출**(OnProof, `--on-result`면 OnResult; 제출 메시지는 stderr). 미지정 시 BPUN_RPC_URL만 필요.
+  - **`btip28:api`** (`server.ts`): **GET /proof**(query: tx_hash, event_index?, attr_indices=csv) = 생성만 / **POST /proof**(body: tx_hash, **to_ccapp 필수**, on_result?, event_index?, attr_indices?) = 생성 + 자동 제출(응답에 `submitted:{method, to_ccapp, endpoint}` 추가). Fabric 설정은 제출 경로에서만 요구(POST 시 lazy load).
+- ⚠️ **타 개발자 리팩토링 감지(2026-06-12)**: `src/prover/*` 전체 삭제(git D) + `src/btip19/` 신설 — r2u prover가 btip19로 이동 중인 듯. `app.module.ts`가 삭제된 `./prover/prover.module`을 참조해 **전체 tsc는 그쪽 에러 1건**(btip28 단독 tsc는 0 에러). package.json `btip39:scan` 스크립트도 dangling. 불가침 영역이라 미수정 — ryan 영역 정리 후 해소될 것.
+- `tx-event-proof.ts`: 빌더(`buildTxEventProof`) — anchor 해석·deterministic 인코딩·BTIP-27 트리·자가검증·페이로드 조립.
+- `btip16-merkle.ts`: BTIP-16 배열 트리(증명 생성 포함). `header-merkle.ts`: btip39 복사 + **idx 11 `buildLastResultsHashProof`**로 개작. `rpc.ts`: btip39 복사 + `/tx`·`/block_results` 추가(base64 디코딩 포함). `types.ts`: Go BPuNTxEventProof 미러(hex 와이어, timestamp bigint, goJsonStringify). `submitter.ts`: registry `GetContract(channel, "LinkerEndpointRole")` 해석 → OnProof/OnResult 제출. `config.ts`: btip39와 동일 env 키(데몬 옵션 제외).
+
+### e2e 절차 (다음 세션)
+
+1. (선행) on-bprn `go build` + 체인코드 배포: linker-endpoint(이번 DER emit 수정 반영)·btip34-ccapp 포함, registry 등록 + btip34-ccapp Setup(SetRegistryID/SetSelfCcName/SetTrustedDApp/Mint). BPuN deploy.ts 재배포(+setPaymentSource).
+2. u2r 본류: `burn-nft.ts`로 TransferLogAttrs 발생 → `npm run btip28:prove -- <txHash> <btip34-ccapp 배포명>` → STC 잔액(beneficiary) 확인 → endpoint가 emit한 LinkerResultElems(DER) 확인.
+3. 2PC 완결(r2u 결과): LinkerResultElems를 r2u prover(BPrNTxEventProof)로 증명해 BPuN `onResult` 제출 → BTIP26Token pending 확정(ACCEPTED=소각 확정). ※ r2u prover(src/prover, 타 개발자 영역)가 9-leaf 신형식과 무관하게 동작하는지 확인.
+4. 역방향(r2u 본류): btip34-ccapp.PayToBPuN → r2u prover → BPuN onProof → NFT 민트 → LinkerResult → **btip28 `--on-result`**로 BPrN OnResult 제출 → btip34-ccapp 에스크로 settle/refund.
+
+---
+
+## 2026-06-11 — ccApp/BPrN STC 모형 (`verifier/on-bprn/btip34-ccapp/`, 구 stc-example) + BPrN 이벤트 와이어 관례 정합
 
 > 사용자 지시: "setPaymentSource 추가하고, ccApp/BPrN은 TransferLogElems 발신 + TransferLogAttrs 처리까지 구현". 구현 전 조사에서 **BPrN 이벤트 와이어 관례를 bpn-core 실물에서 확정**했고, 그 결과 linker-endpoint의 기존 emit이 증명 불가능한 형식이었음을 발견·수정함.
 
@@ -19,15 +152,15 @@
 - **추가 수정**: OnProof의 2PC correlation 추출 — BTIP-35 leaf는 hex 텍스트(topic.1 = 64자 대문자)인데 raw로 LinkerResultElems gidx 4에 싣고 있었음 → BPuN onResult가 `corr.length != 32`로 revert했을 것. `attrHex32At`로 **디코딩 후 32B raw** 탑재로 수정.
 - **bprn-sdk-go v0.10.2 의존 추가** (재사용 원칙): `go.mod` require + `vendor/github.com/beatoz/bprn-sdk-go/chaincodes/event{,/merkle,/types}` 수동 vendor + modules.txt 등재. go.sum 미보충(vendor 모드 빌드는 무관, `go mod tidy` 시 자동). 로컬 bprn-sdk-go 체크아웃 == tag v0.10.2 정확히 일치 확인.
 
-### `stc-example` — ccApp/BPrN 레퍼런스 (IBTIP34 완전 구현 + 토큰 모형)
+### `btip34-ccapp` — ccApp/BPrN 레퍼런스 (IBTIP34 완전 구현 + 토큰 모형)
 
 - **r2u 1단계 — `PayToBPuN(toHex, amountDec, beneficiaryHex, memoHex) → correlationId(hex)`**:
   - 잔액 차감(에스크로 잠금) → **신형 TransferLogElems(gidx 4~8)** emit → **tx_event_root를 SDK 동일 코드로 emit 시점에 직접 계산**해 `PENDING_<root>`에 {from, handler_dapp(=to), amount} 기록 → root hex 반환(= r2u prover 입력).
   - `To`(gidx 5) = 대상 dApp/BPuN(BTIP26Token) 주소 — dApp의 `To==address(this)` 검증과 잠금 시점 intended-handler 기록을 겸함.
   - **클라이언트 직접 호출 전용** (c2c로 부르면 피어가 outer cc를 Header에 박아 root가 어긋남 — 주석 명시).
-- **BTIP-25 CorrelationId 고정점 모순 → 필드 제거 방향 (⚠️ 사용자 최종 컨펌 대기)**: gidx 4는 트리의 리프인데 값이 그 트리의 root여야 함 → 해시 고정점이라 성립 불가. 프로토콜은 gidx 4를 읽지 않음(btip-21 onProof는 증명된 root 직접 사용). 해소안 A(필드 삭제)/B(빈 값 유지+문구 수정)/D(명시 id 회귀) 제시 → 사용자가 "안 쓰는 필드를 대칭성 명목으로 굳이 두냐"는 의견 표명 → **A안으로 일괄 수정이 적용된 상태이나, 이는 명시적 수정 지시 없이 진행된 것** — 유지/롤백 여부 사용자 확인 필요.
+- **BTIP-25 CorrelationId 고정점 모순 → 필드 제거(A안)로 ✅ 확정 (2026-06-12 사용자 컨펌)**: gidx 4는 트리의 리프인데 값이 그 트리의 root여야 함 → 해시 고정점이라 성립 불가. 프로토콜은 gidx 4를 읽지 않음(btip-21 onProof는 증명된 root 직접 사용). 해소안 A(필드 삭제)/B(빈 값 유지+문구 수정)/D(명시 id 회귀) 논의 — D안은 IBTIP26 시그니처 변경(correlationIndex 반환)·prover 페이로드 요건 추가·**revert 시 correlationId 유실(D-B 충돌, REJECTED 결과 발행 불가)** 연쇄가 확인되어 배제. 내재값 방식의 숨은 장점 = dApp이 revert해도 endpoint가 협조 없이 항상 REJECTED 발행 가능("always emit" 결정 8과 정합).
   - 적용된 내용: **CorrelationId 필드 삭제, 9-leaf 재배치**(From=4, To=5, Amount=6, Beneficiary=7, Memo=8), **selector 변경** `sha256("TransferLogElems([]byte,[]byte,[]byte,[]byte,[]byte)")` (5-인자, 구 6-인자 해시 무효). 매칭 식별자 = 요청 이벤트의 `tx_event_root` 내재값(필드 없음).
-  - 반영 파일: btip-25(struct·매칭 식별자 NOTE 신설·selector·트리 9-leaf), btip-40(Abstract·Symmetry — 자산 전송 필드만 동일, 매칭 식별자는 방향별 상이 명시), btips-2pc-design(§5·D-A 2026-06-11 재정정 — D-A 최초 형태 확정), BTIP26Token.sol(GIDX_TO=5/AMOUNT=6/BENEFICIARY=7 + SIG, solc 컴파일 OK), stc-example(elems 5개·SIG), btips.md 상태 테이블(btip-25/40 행).
+  - 반영 파일: btip-25(struct·매칭 식별자 NOTE 신설·selector·트리 9-leaf), btip-40(Abstract·Symmetry — 자산 전송 필드만 동일, 매칭 식별자는 방향별 상이 명시), btips-2pc-design(§5·D-A 2026-06-11 재정정 — D-A 최초 형태 확정), BTIP26Token.sol(GIDX_TO=5/AMOUNT=6/BENEFICIARY=7 + SIG, solc 컴파일 OK), btip34-ccapp(elems 5개·SIG), btips.md 상태 테이블(btip-25/40 행).
 - **u2r — `HandleLinkerEvent` = BTIP-40 TransferLogAttrs 처리** (BTIP26Token.handleLinkerEvent의 거울상):
   - 검증 3종: ① topic.0(gidx 1) == keccak256(TransferLogAttrs sig) ② contractAddress(gidx 0) == **admin이 `SetTrustedDApp`으로 고정한 dApp** (setPaymentSource의 BPrN 대칭 — 공짜 STC 민트 차단) ③ to(topic.3, gidx 4) == **자기 BTIP-9 주소**(sha256(channel+"-"+ccName)[12:]).
   - 형식·출처 위반 = **error(하드 실패, nullifier 롤백 → 올바른 핸들러로 재제출 가능)** / amount==0 = **Status=false 정상 반환**(비즈니스 거부 → REJECTED 결과 → dApp이 소각 복원).
@@ -43,7 +176,7 @@
 
 - **`deploy.ts <chainAlias> [paymentChannel] [paymentChaincode]`**: 인자 제공 시 `btip26Token.setPaymentSource(channel, ccName)` 호출, 미제공 시 SKIP 경고(미설정 = 전부 거부가 안전 기본값).
 - **`burn-nft.ts`**: `to` 인자가 `channel/chaincode` 형식이면 **BTIP-9 주소로 변환**(기본값 `bpn/STC`), 0x 주소도 그대로 허용.
-- **양방향 부트스트랩 절차(신규 환경)**: ① BPrN에 stc-example 배포(예: 이름 "STC") → SetRegistryID/SetSelfCcName("STC")/SetTrustedDApp(BTIP26Token addr) + admin Mint ② BPuN deploy.ts에 `bpn STC` 인자로 setPaymentSource ③ r2u: STC.PayToBPuN(to=BTIP26Token addr, beneficiary, amount) → 반환된 correlationId(=tx_event_root)+txId로 prover → OnProof... ④ u2r: burn-nft.ts → 신규 u2r prover(다음 작업).
+- **양방향 부트스트랩 절차(신규 환경)**: ① BPrN에 btip34-ccapp 배포(예: 이름 "STC") → SetRegistryID/SetSelfCcName("STC")/SetTrustedDApp(BTIP26Token addr) + admin Mint ② BPuN deploy.ts에 `bpn STC` 인자로 setPaymentSource ③ r2u: STC.PayToBPuN(to=BTIP26Token addr, beneficiary, amount) → 반환된 correlationId(=tx_event_root)+txId로 prover → OnProof... ④ u2r: burn-nft.ts → 신규 u2r prover(다음 작업).
 
 ### 세션 논의 기록 (코드 외)
 
@@ -52,8 +185,8 @@
 
 ### 검증 상태 / 다음
 
-- ⏳ `go build ./...` **로컬 미검증** (샌드박스 Go 없음) — on-bprn 전체 빌드 필요(특히 vendor 정합·stc-example). deploy.ts/burn-nft.ts도 재실행 검증 필요. Solidity는 solc 전체 컴파일 OK(gidx 재배치 반영 후 재확인).
-- ⚠️ **CorrelationId 필드 제거(A안) 적용분의 유지/롤백 — 사용자 최종 컨펌 필요** (위 절 참조).
+- ⏳ `go build ./...` **로컬 미검증** (샌드박스 Go 없음) — on-bprn 전체 빌드 필요(특히 vendor 정합·btip34-ccapp). deploy.ts/burn-nft.ts도 재실행 검증 필요. Solidity는 solc 전체 컴파일 OK(gidx 재배치 반영 후 재확인).
+- ✅ CorrelationId 필드 제거(A안) — 2026-06-12 사용자 컨펌으로 확정.
 - 다음: **u2r prover 본체**(BPuNTxEventProof 구성 → OnProof/OnResult 제출) — btip39의 header-merkle 재사용, BTIP-27 2단계 이벤트 트리.
 
 ---
@@ -124,7 +257,7 @@
 
 ---
 
-## 0. 작업 핸드오프 (2026-06-10 작성 — 여기서부터 이어서 읽기)
+## 0. 작업 핸드오프 (2026-06-10 작성 — 과거 기준선, 최신은 §00)
 
 > 노트북 이동 대비 요약. 상세는 각 날짜 절 참조.
 
