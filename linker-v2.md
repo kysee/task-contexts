@@ -1,10 +1,66 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-06-14 (세션 종료 시점) — **아래 §000(2026-06-14 핸드오프)부터 읽기.** 직전 핸드오프는 §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
+> 마지막 업데이트: 2026-06-15 (세션 종료 시점) — **아래 §0000(2026-06-15 핸드오프)부터 읽기.** 직전 핸드오프는 §000(2026-06-14), §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
 
 ---
 
-## 000. 2026-06-14 핸드오프 (여기서부터 이어서 읽기)
+## 0000. 2026-06-15 핸드오프 (여기서부터 이어서 읽기)
+
+> 이 세션의 본류: **(A) btip34-ccapp을 allowance 결제 모형으로 재작성, (B) BPuN deploy/bootstrap 분리 + 양쪽 cross-chain endpoint 등록, (C) localnet 양방향(r2u+u2r) 2PC e2e 전부 성공, (D) allowance 테스트 준비(burnToBPrNFrom 추가).** 다음 세션 본류 = **allowance 테스트 실행**(아래 §0000.5).
+
+### 0000.1 네이밍/디렉토리 통일 (전부 "bpn" 채널 기준)
+
+- **BPrN 크립토 디렉토리**: `bprn-organizations/localnet/` → **`bprn-organizations/bpn/`** (`--network bpn`이 크립토+config 둘 다 선택). prover-ts `.env`/`.env.example`, on-bprn README, link-test-env.sh 주석 모두 갱신.
+- **BPrN 부트스트랩 config**: `bootstrap.localnet.json` → **`bootstrap.bpn.json`**(+`.example`). on-bprn bootstrap은 `--network bpn` → `bprn-organizations/bpn/` + `bootstrap.bpn.json` 자동 선택.
+- **BPuN policy/payment config**: `config.bprn.json` → **`config.bpn.json`**(genesisPolicy + paymentChannel + paymentChaincode + counterpartBPrN 보유). `.gitignore`에 `!**/config.bpn.json` 예외(비밀 아님). 구 `config.bprn.json`은 권한으로 못 지움 → 사용자 `rm` 필요.
+- **BPuN 체인 config**: `config.localnet0.json` 신규(chainId `0x1234`, providerUrl `http://127.0.0.1:26657`, deployerPrvKey). gitignore 대상.
+- ⚠️ **잔재 삭제(사용자)**: `verifier/on-bpun/scripts/.net/config.bprn.json`, `verifier/on-bpun/scripts/beatoz/init-policy.ts`(deprecated 스텁), `verifier/on-bprn/scripts/mint-once.ts`(임시) — 마운트 권한으로 자동삭제 실패, `rm`은 사용자가.
+
+### 0000.2 btip34-ccapp 재작성 (allowance 결제 모형) — 핵심
+
+trusted-source/mint → **ERC20 allowance 결제**로 재작성(설계: bpun-origin-payment-design 결정 (iv)·§15.4). `SetTrustedDApp`·화이트리스트·mint-credit 제거.
+
+- **U2R `HandleLinkerEvent`**: STC를 **`from` → `beneficiary`** 전송. 인가 = `from == msgSender`(self-funds, **approve 불필요**) 또는 `allowance[from][msgSender] >= amount`(차감). `msgSender` = TransferLogAttrs의 contractAddress(=이벤트 emit한 컨트랙트 = 크로스체인 caller). 잔액·allowance·amount=0 부족 = business rejection(Status=false→REJECTED), 형식·topic0 불일치 = hard error. **변수명 `requestedBy`→`msgSender` 확정**(2026-06-15 사용자 합의: emit=상대체인 HandleLinkerEvent 호출로 보면 emitter가 곧 msg.sender. spender는 self-funds 분기 못 담음).
+- **R2U `PayToBPuN(from, to, amount, beneficiary, memo)`**: `from` 명시. from→to pending 잠금, TransferLogElems emit. `HandleLinkerResult`: ACCEPTED→`to`에 settle, REJECTED→`from` 환불.
+- **신설**: `Approve(owner, spender, amount)`, `Allowance(owner, spender)`, `Transfer(from,to,amount)` from 명시. `Mint`(테스트 시드) 유지.
+- 메모리 참조: [[project-btip34-ccapp-allowance-redesign]].
+
+### 0000.3 BPuN deploy/bootstrap 분리 + 양쪽 cross-chain endpoint 등록
+
+- **deploy.ts = 배포 전용**(6개 컨트랙트 배포·주소 저장만). **bootstrap.ts 신규** = 와이어링(setSelfContract×4, setRegistry×4) + setPaymentSource + initPolicy(config.bpn.json genesisPolicy) + **counterpartBPrN 등록** + registry 검증. 인자 `<chainAlias> <bprnChannelId> [--dry-run]`. setup.sh = deploy→bootstrap, `<chain> <bprnChannelId>`. init-policy.ts deprecated.
+- **cross-chain endpoint 등록(양방향 대칭) — e2e에서 발견한 필수 단계**:
+  - **BPrN bootstrap → `counterpartBPuN`**: OnResult가 `GetContract(BPuN_chainId, "LinkerEndpointRole")`로 BPuN endpoint resolve해 LinkerResult 출처 검증. `bootstrap.bpn.json`에 `counterpartBPuN{chainId, linkerEndpoint(=BPuN endpoint addr)}` → `SetContract(chainId, addr, LinkerEndpointRole)`.
+  - **BPuN bootstrap → `counterpartBPrN`**: onResult가 `getContract(uint256(sha256(channel+"/BPrN")), keccak256("LinkerEndpoint"))`로 BPrN endpoint resolve. `config.bpn.json`에 `counterpartBPrN{channel, endpointCc}` → 파생값 계산해 `setContract(chainId, role, BTIP9addr=sha256(channel+"-"+endpointCc)[12:])`.
+
+### 0000.4 e2e 양방향 성공 (localnet0 ↔ bpn) + 고친 함정들
+
+**r2u(BPrN-origin)**: PayToBPuN → btip19:cli `--attrs 0,1,3,5,6,7 --to-dapp <BTIP26Token>`(BPuN onProof, NFT 민트) → btip28:cli `--event-index 4 --to-ccapp BTIP34CCApp --on-result`(BPrN settle). **u2r(BPuN-origin)**: burn-nft → btip28:cli `--event-index 2 --to-ccapp BTIP34CCApp`(BPrN OnProof, self-funds 전송) → btip19:cli `<BPrN txId> --to-dapp <BTIP26Token> --on-result`(BPuN BurnFinalized). 값 보존 확인.
+
+함정(전부 코드 반영): ① cross-chain endpoint 등록 누락(§0000.3). ② **btip28 null-sibling 와이어**: JSON `null`이 contractapi `[]string` 스키마에서 거부 → `""`로 보내야(Go HexBytes가 ""·null 둘 다 nil; tx-event-proof.ts toWire). ③ **btip28 `--event-index`는 ABCI 이벤트 전체(비-evm `tx` 포함) 0-based 카운트**. ④ **BTIP26Token.burnToBPrN의 from=address(this)**(msg.sender 아님): self-funds 분기 → approve 불필요, to/beneficiary=msg.sender, to/beneficiary 파라미터 제거. ⑤ **burn-nft.ts memo(bytes)는 hex 문자열**(`'0x'+hex`)로(Node Buffer 직접 전달 시 web3 ABI 거부). ⑥ btip28 burn tx: TransferLogAttrs=data 있는 evm(attrs=8), ERC721 소각 Transfer=전부 indexed(attrs=7), 보통 index 2.
+
+prover-ts `.env`(gitignore): `FABRIC_*`→bprn-organizations/bpn, `LINKER_REGISTRY_CC=LinkerRegistryCC`(CC 접미사!), `BPUN_CHAIN_ID=0x1234`, `BPUN_LINKER_REGISTRY=<BPuN registry>`, `BPUN_PRIVATE_KEY=<deployer>`. btip39:sync 데몬 상시 실행. 메모리: [[project-r2u-e2e-localnet-2026-06-15]].
+
+### 0000.5 다음 작업 — allowance 테스트 (본류, 미실행)
+
+준비 완료: **`BTIP26Token.burnToBPrNFrom(tokenIds, from, memo)`** 추가(burnToBPrN 동일 + from 파라미터로 emit → `from != contractAddress` → BPrN delegated 분기). `burn-nft.ts --from <addr>` 옵션(주면 burnToBPrNFrom). `approve.ts`(on-bprn) 신규.
+
+**미실행 — 다음 세션 본류**: burnToBPrNFrom은 **BTIP26Token 재컴파일+재배포 필요**. 절차: ① BTIP26Token 재배포(+setRegistry/setPaymentSource; setup.sh 전체면 LinkerEndpoint 주소 바뀌어 counterpartBPuN/BPrN 갱신+재부트스트랩) ② r2u로 새 BTIP26Token에 NFT 민트 ③ payer A에 STC + `approve --owner A --spender <BTIP26Token> --amount`(approve.ts) ④ `burn-nft.ts ... --from A` ⑤ btip28 `--to-ccapp BTIP34CCApp`(delegated 분기, allowance 차감) ⑥ btip19 `--on-result`. 검증: `balance --addr A --spender <BTIP26Token>`로 allowance 소진 확인. **REJECT 경로**: approve 안 한 주소를 `--from`으로 → allowance=0 → business rejection → NFT 복원.
+
+### 0000.6 현재 배포 주소 / 계정 (localnet0, chainId 0x1234)
+
+- BPuN: LinkerRegistry `0xfc487a5db9977aafebbe786587f5258a5de8e75f`, LinkerEndpoint `0x2a534f1f32267923f448174a9d8c79a20c765b2e`, BTIP26Token `0x618cbe55828113d9cc654c5e6a13195a9cf9fd22`(**burnToBPrNFrom 재배포 시 변경**).
+- BPrN(channel `bpn`) cc: LinkerRegistryCC / LinkerEndpointCC / LinkerVerifierCC / LinkerNullifierCC / LinkerPolicyCC / BTIP34CCApp.
+- 테스트 계정 `0x3FD3E78544B064B0B3FC1F11DC7FB065D80CD52F` = BPuN deployer = NFT 소유자 = STC 홀더(부트스트랩 Mint 대상, mint.amount 10e18).
+
+### 0000.7 보조 스크립트 / git
+
+- on-bprn/scripts: `pay.ts`·`balance.ts`·`approve.ts`(정식, npm run) + `mint-once.ts`(임시) + `README.md`(스크립트별 usage+파라미터). on-bpun/scripts/beatoz: `nft.ts`·`bootstrap.ts` 신규 + `README.md`. btip28/btip19 제출 시 txId/txHash 출력 + 다음명령 힌트(pay/burn-nft/btip19/btip28).
+- ⚠️ **go build 미검증**(샌드박스 Go 없음): btip34-ccapp(msgSender 리네임)·BTIP26Token(burnToBPrNFrom, burnToBPrN from 변경) 재컴파일/빌드는 사용자 머신에서. 단순 리네임/추가라 영향 적음.
+- **git 전부 미커밋**(본 세션 변경 다수). 리포별로 사용자가 직접 커밋.
+
+---
+
+## 000. 2026-06-14 핸드오프
 
 > 이 세션은 (A) stale 메모 정정, (B) `bprn-organizations` 디렉토리 재배치 + connection-profile 상대경로화, (C) on-bprn 부트스트랩 스크립트 작성을 수행. 다음 세션은 **localnet e2e**(§00.4 2번)가 본류.
 
