@@ -1,10 +1,66 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-06-12 (세션 종료 시점) — **아래 §00(2026-06-12 종합 핸드오프)부터 읽기.** 상세는 날짜별 절, 직전 기준선은 §0(2026-06-10).
+> 마지막 업데이트: 2026-06-14 (세션 종료 시점) — **아래 §000(2026-06-14 핸드오프)부터 읽기.** 직전 핸드오프는 §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
 
 ---
 
-## 00. 종합 핸드오프 (2026-06-12 세션 종료 — 여기서부터 이어서 읽기)
+## 000. 2026-06-14 핸드오프 (여기서부터 이어서 읽기)
+
+> 이 세션은 (A) stale 메모 정정, (B) `bprn-organizations` 디렉토리 재배치 + connection-profile 상대경로화, (C) on-bprn 부트스트랩 스크립트 작성을 수행. 다음 세션은 **localnet e2e**(§00.4 2번)가 본류.
+
+### 000.1 이 세션에서 한 일 (요약)
+
+**(A) stale 메모 정정 — 코드가 노트보다 앞서 있었음 (사용자 직접 병합)**
+
+- 발견: `LinkerPolicyVerifier`(별도 컨트랙트)는 **폐지**되고 `LinkerPolicy.sol`이 `contract LinkerPolicy is IBTIP22`로 **Trust Anchor 데이터 + IBTIP22 검증을 단일 컨트랙트**에 보유(검증 로직은 `lib/LinkerPolicyVerifierLib.sol` library). 이 병합이 모든 노트(2026-06-12 핸드오프 포함)보다 최신이라, 노트·주석이 옛 2-컨트랙트 구조를 설명하고 있었음.
+- 따라서 §00.4 보류 항목 중 **IBTIP22 메소드명 불일치·LINKER_POLICY 바인딩 재설계는 실제로 해소됨**: registry의 LINKER_POLICY role이 deploy.ts에서 `LinkerPolicy`를 가리키고(=데이터 컨트랙트 기준 자연 충족), 메소드명도 LinkerVerifier·LinkerPolicy 양쪽이 스펙명 `verifyChannelEndorsementPolicy`로 일치.
+- **정정한 파일**: `verifier/on-bpun/scripts/beatoz/deploy.ts`(LINKER_POLICY 주석을 실제 동작으로 교체), 본 문서 §00.4·§0.4(정정 마커 추가). **잔재**: `verifier/on-bpun/scripts/.net/deployed.localnet0.LinkerPolicyVerifier.json`은 소스 없는 옛 배포 기록 → 삭제 후보.
+
+**(B) `bprn-organizations` 재배치 + connection-profile 상대경로화**
+
+- **이동**: `prover-ts/bprn-organizations/` → **`linker-v2/bprn-organizations/`**(최상위 공유 루트). 이유: prover-ts + verifier/on-bprn/scripts 둘 다 소비 → 교차 패키지 상대경로/심볼릭 회피. 심볼릭 링크 4개(절대경로 타깃) 생존.
+- **connection-profile.json 상대경로화**: `tlsCACerts.path`를 `peerOrganizations/...`/`ordererOrganizations/...` 상대경로로 변경(stale `/Users/kylekwon/...` 제거). 멀티네트워크 이식성 확보.
+- **로더 수정(결합 필수)**: `prover-ts/src/common/fabric.ts` `FabricClient.connect`에 `resolveProfileTlsPaths()` 추가 — 상대 CA 경로를 **프로파일 파일 디렉토리 기준**으로 절대화(절대경로는 그대로, 하위호환). 이걸 안 하면 fabric-network가 CWD 기준으로 풀어 **prover가 깨짐**. tsc 클린(유일 에러는 기존 `app.module.ts`).
+- **link 스크립트 재배치**: `bprn-organizations/link-test-env.sh`(신규) — `<network>` 파라미터화, DST=`<script-dir>/<network>`, 기본 src `~/go/src/github.com/beatoz/bpn-core-2.2/bprn-test-env`(kysee). 구 `prover-ts/scripts/link-bprn-test-env.sh`는 마운트 권한으로 삭제 불가 → **이전 안내 스텁으로 덮어씀**(완전 삭제는 사용자 `rm` 필요).
+- **`.env.example`**: 새 경로 반영(`../bprn-organizations/localnet/...`, 경로는 prover-ts/ cwd 기준 상대).
+
+**(C) on-bprn 부트스트랩 스크립트 (`verifier/on-bprn/scripts/`)**
+
+- **자체완결 node 프로젝트**(사용자 선택). 배포는 bpn-core에 위임, **부트스트랩(invoke)만** 담당.
+- 파일: `bootstrap.ts`(Gateway connect 자체구현, fabric-network 2.2.20), `package.json`, `tsconfig.json`, `bootstrap.localnet.example.json`(validator set 포함 예시), `README.md`(역할+usage), `.gitignore`.
+- **invoke 시퀀스**(bpn-core `3_linker_init.sh` + 코드 시그니처에서 도출): registry.SetContract×4(endpoint/verifier/policy/nullifier role) → endpoint·verifier.SetRegistryID / nullifier.SetRegistry → policy.SetValidatorSet(JSON) → btip34.SetRegistryID/SetSelfCcName/SetTrustedDApp/Mint.
+- **파라미터**: `--network <name>`(→`bprn-organizations/<name>/`의 profile+User1), `--config`(기본 `bootstrap.<network>.json`), `--dry-run`, `--continue-on-error`. config로 cc 이름·role·trustedDApp·mint·validatorSet 지정(기본값은 var.sh 이름: LinkerRegistry/LinkerEndpoint/LinkerVerifier/LinkerPolicy/LinkerNullifier/BTIP34CC, role 평문 `*Role`).
+- 검증: 샌드박스 임시 디렉토리에서 prover-ts node_modules 빌려 **tsc --noEmit 통과(에러 0)**. 라이브 BPrN invoke는 미검증(사용자 머신 첫 실행).
+
+### 000.2 주의·제약 (반드시 인지)
+
+1. **라이브 BPrN 접속 테스트 미실시**: 샌드박스는 `grpcs://peer0.org1.bc` 접속 불가 + 크립토 심볼릭이 호스트 절대경로 → 실제 invoke 검증은 사용자 머신 첫 실행. 코드는 tsc 통과 + 기존 FabricClient 패턴 그대로.
+2. **`--init-required` 없이 배포 필요**: fabric-network 2.2는 init(`--isInit`) 호출 불가 → 부트스트랩 스크립트는 plain submitTransaction만. init-required로 배포하면 첫 invoke가 init여야 해서 안 됨. bpn-core 배포 시 init-required 빼거나 init은 peer CLI로 별도 처리.
+3. **심볼릭 stale**: 현 심볼릭 4개는 `/Users/kylekwon/...`(stale) 타깃 → 사용자 머신에서도 깨져 있을 것. 이동 후 `link-test-env.sh <network> [src]` 재실행으로 교정.
+4. **마운트 권한으로 `rm` 불가**: 구 link 스크립트 스텁화로 우회. 완전 삭제는 사용자.
+
+### 000.3 실행 런북 (사용자 머신)
+
+```
+# 1) 크립토 심볼릭 재생성
+cd linker-v2/bprn-organizations && ./link-test-env.sh localnet [bprn-test-env 경로]
+# 2) 체인코드 배포 — bpn-core-2.2/scripts/run (⚠️ --init-required 없이)
+# 3) 부트스트랩
+cd linker-v2/verifier/on-bprn/scripts
+npm install
+cp bootstrap.localnet.example.json bootstrap.localnet.json   # trustedDApp(=BPuN BTIP26Token 주소)/mint 채우기
+npm run bootstrap -- --network localnet --dry-run            # 계획 확인
+npm run bootstrap -- --network localnet                      # 제출
+```
+
+### 000.4 git 상태 / 다음 작업
+
+- **git 미커밋**: 본 세션 변경 전부 미커밋(디렉토리 이동, connection-profile, fabric.ts, .env.example, on-bprn/scripts 신규, deploy.ts 주석, task-contexts). ⚠️ `linker-v2/.git/index.lock` 잔존(이전 git status가 남긴 것, 마운트 권한으로 자동삭제 실패) — **커밋 전 `rm -f linker-v2/.git/index.lock`**. 이 리포 git 작업은 사용자가 직접(샌드박스가 lock 정리 못 함).
+- **다음 작업**: §00.4 우선순위 유지 — (1) on-bprn `go build`(사용자 확인 완료), **(2) localnet e2e**(부트스트랩→u2r/r2u→`--on-result` 교차 2PC 완결)가 본류, (3) multi-peer commit-sig 등 보류.
+
+---
+
+## 00. 종합 핸드오프 (2026-06-12 세션 종료)
 
 ### 00.1 상시 작업 규칙 (사용자 지시, 세션 불문 적용)
 
@@ -59,7 +115,7 @@ src/btip{19,28,39}-*/   cli.ts/server.ts(btip39는 main.ts)/config.ts/submitter.
 1. **on-bprn `go build ./...` 로컬 검증** (vendor 정합·btip34-ccapp 포함) — 유일한 빌드 미검증.
 2. **localnet e2e** (§"2026-06-12 — btip28" e2e 절차 참조): ① 체인코드 배포+부트스트랩(btip34-ccapp: SetRegistryID/SetSelfCcName/SetTrustedDApp/Mint; BPuN: deploy.ts `<chain> bpn <STC cc명>`로 setPaymentSource) ② u2r: burn-nft.ts → btip28:cli --to-ccapp ③ r2u: btip34-ccapp.PayToBPuN → btip19:cli --to-dapp ④ 양방향 2PC 완결(--on-result 교차).
 3. e2e 관전 포인트: BTIP-35 attr 실데이터 형식(topic 대문자/0x 유무 — endpoint attrHex32At·btip34-ccapp hexEqual 가정), IsBTIP27 활성 높이, btip19 ABI·@beatoz/web3 제출 경로 첫 실행.
-4. 보류: multi-peer commit-sig, IBTIP22 메소드명(ryan 영역), LINKER_POLICY 바인딩 재설계, 3_linker_update_vs.sh stale.
+4. 보류: multi-peer commit-sig, 3_linker_update_vs.sh stale. (~~IBTIP22 메소드명·LINKER_POLICY 바인딩 재설계~~ — **2026-06-14 코드 확인 결과 해소**: `LinkerPolicy`가 `is IBTIP22`로 데이터+검증 단일 컨트랙트가 되어 role이 LinkerPolicy를 직접 가리키고 메소드명도 스펙명과 일치. §0.4 정정 참조.)
 
 ### 00.5 git 상태 주의 (이 세션이 남긴 워킹 트리)
 
@@ -331,8 +387,7 @@ src/btip{19,28,39}-*/   cli.ts/server.ts(btip39는 main.ts)/config.ts/submitter.
 
 ### 0.4 보류/관찰 (사용자 결정 대기 또는 타인 영역)
 
-- **LINKER_POLICY 바인딩 재설계**: registry의 LINKER_POLICY는 현재 LinkerPolicyVerifier(IBTIP22 구현체) 기준 — LinkerVerifier가 그 주소에 IBTIP22를 직접 호출하기 때문. 사용자는 LinkerPolicy(Trust Anchor 데이터 컨트랙트) 기준을 원하나, LinkerPolicy에 verifier getter가 없어(`_policyVerifier` private, 정책 스위트 불가침) 보류("policyVerifier 로 일단 가자" — 2026-06-10). 재바인딩 시 LinkerPolicy getter 추가 + LinkerVerifier 2-hop 조회 필요.
-- **IBTIP22 메소드명 불일치**: btip-22 스펙 `verifyChannelEndorsementPolicy` vs 코드 `verifyChannelEndorsement` — 정책 스위트(ryan 영역) 불가침이라 verifier는 현행 이름 호출. 정합 필요.
+- ~~**LINKER_POLICY 바인딩 재설계**~~ / ~~**IBTIP22 메소드명 불일치**~~ — **해소 (2026-06-14 코드 확인, 사용자 직접 병합 반영)**: 별도 `LinkerPolicyVerifier` 컨트랙트는 폐지되고 `LinkerPolicy.sol`이 `contract LinkerPolicy is IBTIP22`로 **Trust Anchor 데이터(채널·정책·org 인증서/CRL)와 검증(`verifyChannelEndorsementPolicy`)을 단일 컨트랙트에 보유**. 검증 로직은 `lib/LinkerPolicyVerifierLib.sol`(library)로 분리. registry의 LINKER_POLICY role도 deploy.ts에서 `LinkerPolicy` 주소를 가리킴 → 사용자가 원하던 "데이터 컨트랙트 기준"이 자연 충족되어 getter·2-hop 조회 불요. 메소드명도 LinkerVerifier·LinkerPolicy 양쪽이 스펙명 `verifyChannelEndorsementPolicy`로 일치. 잔재: `scripts/.net/deployed.localnet0.LinkerPolicyVerifier.json`은 소스 없는 옛 배포 기록(삭제 후보), deploy.ts 옛 NOTE는 2026-06-14 정정 완료.
 - **결제 이벤트 정의 BTIP** 미작성 (권한 3분기 명문화 선결 조건 — bpun-origin-payment-design §15.9).
 - STC use case 잔존: settle 행선지, approve BPrN/BPuN 동기화 (§10-8 (a)(c) — PaymentBridge 분리 문제는 §16에서 해소).
 
