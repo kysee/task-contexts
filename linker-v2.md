@@ -1,6 +1,50 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-06-15 (세션 종료 시점) — **아래 §0000(2026-06-15 핸드오프)부터 읽기.** 직전 핸드오프는 §000(2026-06-14), §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
+> 마지막 업데이트: 2026-06-18 (세션 종료 시점) — **아래 §00000(2026-06-18 핸드오프)부터 읽기.** 직전 핸드오프는 §0000(2026-06-15), §000(2026-06-14), §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
+
+---
+
+## 00000. 2026-06-18 핸드오프 (여기서부터 이어서 읽기)
+
+> 이 세션 본류: **Vitest 통합 테스트 하니스 정비** — (A) test/를 prover **API(증명 생성)만 호출 + 제출은 직접** 하는 구조로 리팩터링, (B) test env 파일 네이밍을 `bprn`/`bpun` 접두사화, (C) ID(시스템 코드값) vs Alias(설정 선택자) 용어 혼용 정리. **다음 본류는 여전히 §0000.5 allowance 테스트 실행**(BTIP26Token 재배포 선행).
+
+### 00000.1 test/ Vitest 하니스 (linker-v2/test) — 위치·구성
+
+- **`linker-v2/test/`** (verifier·prover-ts 둘 다 호출하므로 최상위). 파일: `run.mjs`, `config.ts`, `helpers.ts`, `01-r2u-accepted.test.ts`(시나리오1만 구현), `vitest.config.ts`(순차: fileParallelism=false, singleFork, 180s), `README.md`(4 시나리오 명세).
+- 실행: **`npm run test -- <bprnChannelAlias> <bpunChainAlias>`** (예: `npm run test -- bpn localnet0`). run.mjs가 `TEST_BPRN_ALIAS`/`TEST_BPUN_ALIAS` 세팅 → `npx vitest run`.
+- config.ts: **prover-ts/.env, deployed.*.json 의존 끊음.** 컨트랙트 주소·키·cc명을 env 파일에 인라인, ABI는 최소 fragment(`BTIP26_ABI`)로 빌드 아티팩트 의존도 제거.
+
+### 00000.2 prover API 호출 + 직접 제출 리팩터링 (이 세션 핵심)
+
+- **변경 전**: helpers가 prover-ts `buildTxEventProof` + `EndpointSubmitter`를 in-process로 사용(증명 생성·제출 둘 다 prover-ts).
+- **변경 후**: **증명 생성 = prover HTTP `GET /proof`, 제출 = test가 직접**(이미 양 체인에 접속해 dApp/ccApp tx 제출 중이므로).
+  - **btip19:api(:3019, BPrN 증명)** `GET /proof?tx_id=&channel=&attrs=` → `payload`(BPrNTxEventProof). int64 안전 → `JSON.parse(text).payload`. 제출: **web3로 BPuN `LinkerEndpoint.onProof/onResult(toSolidityProof(payload), handlerDApp)`**. 엔드포인트 주소 = env `BPUN_LINKER_ENDPOINT`. `ENDPOINT_ABI`·`toSolidityProof`는 helpers에 **인라인 복제**(prover-ts submitter 동일).
+  - **btip28:api(:3028, BPuN 증명)** `GET /proof?tx_hash=&event_index=` → `payload`(BPuNTxEventProof). ⚠️ **int64 정밀도 함정**: payload의 validator vote timestamp(Unix ns)가 `Number.MAX_SAFE_INTEGER` 초과 → `JSON.parse`하면 손상. 응답 텍스트에서 `payload` 객체를 **파싱 없이 raw 추출**(`extractRawObjectField` = 중괄호 밸런싱, 문자열 이스케이프 처리)해 그대로 fabric에 전달. 제출: **fabric `LinkerEndpointCC.OnProof/OnResult(rawPayloadJson, handlerCcId)`**. 엔드포인트 cc는 `resolveContractByRole(registryCc, 'LinkerEndpointRole')`.
+- helpers 시그니처: `r2uOnProof(bprnTxId,toDapp,attrs)→{txHash,height,endpoint}`; `r2uOnResult(fabric,bpunTxHash,eventIndex,toCcapp)`; `u2rOnProof(fabric,...)`; `u2rOnResult(bprnTxId,toDapp,attrs)`. **BPuN 제출=fabric 불필요, BPrN 제출=fabric 필요**.
+- config.ts: `CFG.prover.btip19Url`(BPrN env), `CFG.prover.btip28Url`(BPuN env) 추가. 불필요해진 `bpunSubmitConfig`/`btip28Config` 팩토리 제거(`fabricConnectionConfig`만 유지).
+- **새 전제조건**: e2e에 btip19:api/btip28:api **서버 실행 필요**(README 전제조건 반영). `BTIP19_API_URL`/`BTIP28_API_URL` env 추가. `tsc --noEmit` 통과(Node 18+ global fetch).
+
+### 00000.3 test env 파일 네이밍: `bprn`/`bpun` 접두사
+
+- `.env.<alias>` → **`.env.bprn.<bprnChannelAlias>` / `.env.bpun.<bpunChainAlias>`**(접두사로 체인 쪽 즉시 구분).
+- config.ts `loadEnvFile(side, alias)` → `.env.${side}.${alias}`. run.mjs는 불변(위치 인자 2개).
+- 실파일(gitignore): `.env.bprn.bpn`, `.env.bpun.localnet0`. 예시(추적): `.env.bprn.channelAlias.example`, `.env.bpun.chainAlias.example`. `.gitignore`(`.env.*`, `!.env.*.example`) 그대로 커버.
+
+### 00000.4 ID(코드값) vs Alias(선택자) 용어 정리
+
+- **원칙**: ID/Name = 블록체인 시스템이 인지하는 코드값(chainId `0x1234`, Fabric 채널명 `bpn`). Alias = 설정 파일을 고르는 운영자용 명칭(`localnet0`). 값이 우연히 같아도(채널 alias `bpn` == 채널명 `bpn`) 개념은 다름.
+- **발견된 혼용**: on-bpun bootstrap 2nd 인자 `bprnChannelId`는 실은 `config.<X>.json` **선택자(=alias)**, 실제 채널명은 그 config의 `counterpartBPrN.channel`/`paymentChannel` 필드. 1st 인자 `<chain>`("chain name")도 실은 alias(실 chain id는 `config.chainId`).
+- **수정**: `bprnChannelId`→**`bprnChannelAlias`**, 사용자 확정 (b)로 **on-bpun 스크립트 9개 전체 `chainAlias`→`bpunChainAlias`**(setup.sh `CHAIN_ALIAS`→`BPUN_CHAIN_ALIAS` 포함). test 명명과 대칭(`bpunChainAlias`/`bprnChannelAlias`). **인자 위치·값 불변 → 실행 방식 동일.**
+- **on-bprn은 alias로 감싸지 않음**: `--channel <name>`=실제 채널명(`getNetwork`에 직접 전달), `--network <name>`=org 디렉토리 선택자. BPrN쪽엔 channelAlias 개념 없음(그대로 둠).
+- **올바른 용법이라 유지**: `BPUN_CHAIN_ID`, `config.chainId`, `counterpartBPuN.chainId`, 최상위 README의 chainId/channelName 값.
+- 수정 파일: `setup.sh`, on-bpun `bootstrap.ts`/`deploy.ts`/`nft.ts`/`burn-nft.ts`/`submit-proof.ts`/`cancel-event.ts`/`utils.ts`, on-bpun `scripts/beatoz/README.md`, `test/README.md`.
+
+### 00000.5 다음 작업 / 미해결
+
+- **본류 변함없음 = §0000.5 allowance 테스트**: BTIP26Token(`burnToBPrNFrom`) 재컴파일+재배포 선행, 재배포 시 counterpartBPuN/BPrN 갱신.
+- test 시나리오: **01(r2u accepted)만 구현**. 2(r2u REJECTED/refund), 3(u2r self-funds accepted), 4(u2r delegated 미승인 REJECTED) 미구현(README 명세). helpers에 `u2rOnProof`/`u2rOnResult`·`stcApprove`/`stcMint`·`findEventIndexByContract` 준비됨.
+- **go/solc 미검증**(샌드박스). test `tsc`만 통과. e2e 실행엔 두 체인 + `btip39:sync` + **btip19:api/btip28:api 서버** 필요.
+- git 미커밋(리포별 사용자 커밋).
 
 ---
 
