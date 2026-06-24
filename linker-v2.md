@@ -1,6 +1,30 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-06-18 (세션 종료 시점) — **아래 §00000(2026-06-18 핸드오프)부터 읽기.** 직전 핸드오프는 §0000(2026-06-15), §000(2026-06-14), §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
+> 마지막 업데이트: 2026-06-24 (세션 종료 시점) — **아래 §000000(2026-06-24 핸드오프)부터 읽기.** 직전 핸드오프는 §00000(2026-06-18), §0000(2026-06-15), §000(2026-06-14), §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
+
+---
+
+## 000000. 2026-06-24 핸드오프 (여기서부터 이어서 읽기)
+
+> 이 세션 본류: **보안 점검(Axelar/Secret ICS20 사고 대조) + BTIP-43 신설 + griefing(#5a) u2r 갭 수정**. 다음 본류는 여전히 §00000.5 allowance 테스트 실행(BTIP-43 코드 구현은 다중 소스 체인 로드맵 시점).
+
+### 000000.1 한 일
+
+- **보안 분석 문서 신설**: `axelar-ics20-vs-linker-v2-2026-06-24.md` — Axelar/Secret CW20-ICS20 익스플로잇(소스 채널 검증 누락 → 무담보 발행)을 기준으로 Linker V2 공격 트리(프로토콜이 막는 것 vs 앱 책임) + 약점 영향 분석. **말미 "점검 결과" 절 = 최종 결론**: 통제된 단일-BPrN + chaincode 승인 규율 + initPolicy onlyOwner 전제 하에 **Axelar 사고는 재현되지 않음**(출처 검증이 "수신 dApp 코드" → "배포 승인 거버넌스"로 이동, 통제 환경에서 충분). 핵심 통찰: 이벤트 발행 ≠ 자산 이동. 전제(거버넌스 불변식)는 BTIP/운영문서에 명시 필요.
+- **BTIP-43 신설(Draft)**: `docs/BTIPS/btip-43.md` "Remote Actor Address Derivation on BPrN". README 인덱스 등재 완료. 다중 소스 체인 시 "동일 주소·다른 컨트롤러"(주소충돌)를 막기 위해 원격 BPuN 행위자를 `btip43Addr(srcChainId, addr)=address(sha256(srcChainId‖addr)[12:32])`로 식별.
+- **설계 기록(자기완결 인계)**: `btip43-remote-actor-address-design.md` — BTIP-43 발단·진화·결정·현재상태·구현영향·남은작업 전부. **다음 세션은 이 문서부터 읽으면 BTIP-43 맥락 복원 가능.**
+- **griefing(#5a) u2r 갭 수정 (코드+스펙)**: BTIP26Token의 `handleLinkerResult`가 결과 핸들러를 대조 안 하던 비대칭 갭(r2u btip34-ccapp은 하는데 u2r은 안 함) 해소. 수정: `handlerCcId == _paymentChaincode`(= r2u 결제 출처 STC) 대조 + 불일치 시 `ErrUntrustedResultHandler` revert. `handleCcId`→`handlerCcId` 명칭 통일(btip-26 인터페이스/본문, IBTIP26.sol, BTIP26Token.sol). btip-26 §2PC line 126을 "출처 핸들러 한정하려면 기록·대조해야 한다"(조건부 의무)로 강화. 전제: u2r 핸들러=r2u 출처(같은 STC) — 코드 주석에 명시. **자기완결 기록: `griefing-review-2026-06-24.md`.**
+
+### 000000.2 핵심 발견 (추적 필요)
+
+- **(HIGH, 조치 완료) `LinkerPolicy.sol` `initPolicy` 접근제어 부재** → front-run으로 신뢰 루트(Root CA) 탈취 가능했음. `onlyOwner` 적용 + deploy+init 원자화로 해소.
+- 현 구현은 **1 BPuN : 1 BPrN**(policy가 단일 소스 체인). BTIP-43 결함은 다중 소스 체인 전제라 **현재 악용 불가**, 다중 체인 지원 시 필요.
+
+### 000000.3 남은 작업
+
+- **btip-34 → btip-43 상호참조 포인터 추가** — `btip-34.md`에 BTIP-43 참조 링크 한 줄. (진행 예정; 설계 기록 §7)
+- **btip-34 Approve 인터페이스 확장** — spender 소스 체인 파라미터 추가: `Approve(owner, spenderChainId, spender, amount)`, 키 = `btip43Addr(spenderChainId, spender)`. `Allowance`도 대칭. (설계 기록 §7; "toChainId"는 PayToBPuN용이고 Approve는 `spenderChainId`)
+- BTIP-43 코드 구현 전반(다중 소스 체인 로드맵 시점) — 구현영향은 설계 기록 §6.
 
 ---
 
