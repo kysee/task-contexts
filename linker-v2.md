@@ -1,6 +1,27 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-06-24 (세션 종료 시점) — **아래 §000000(2026-06-24 핸드오프)부터 읽기.** 직전 핸드오프는 §00000(2026-06-18), §0000(2026-06-15), §000(2026-06-14), §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
+> 마지막 업데이트: 2026-07-14 (세션 종료 시점) — **아래 §0000000(2026-07-14 핸드오프)부터 읽기.** 직전 핸드오프는 §000000(2026-06-24), §00000(2026-06-18), §0000(2026-06-15), §000(2026-06-14), §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
+
+---
+
+## 0000000. 2026-07-14 핸드오프 (여기서부터 이어서 읽기)
+
+> 이 세션 본류: **u2r correlationId replay 이중지불 취약점 발견 → 해소 설계(방안 A(b): 결과 이벤트에 발행자 주소를 실어 그 발행자에게만 라우팅) → BTIP 문서 + 전 코드 + 테스트 반영 → solc/go/tsc 정적 검증 통과.** 다음 본류 = 라이브 e2e(재배포 후 03/04/05 재실행 + 06 replay PoC).
+
+**단일 진입점:** 이 건의 자기완결 기록은 `u2r-result-origin-routing-design-2026-07-14.md`(설계·최종 데이터/네이밍·파일별 코드 변경·커밋 해시·빌드 상태·남은 작업·별개 이슈 전부). 여기선 요지만.
+
+### 0000000.1 한 일 (전부 커밋 완료)
+
+- **취약점:** nft-dApp이 burn·환불(cid1) 후, 공격자 fake-dApp이 **동일 cid1** TransferLogAttrs를 같은 stablecoin-ccApp에 흘려 REJECTED 결과를 얻어 nft-dApp에 제출 → NFT 재발행 → STC환불+NFT 이중지불. 뿌리: BPuN `onResult(payload, handlerDApp)`의 handlerDApp이 제출자 지정이라 결과가 발행자에 결속 안 됨(u2r explicit correlationId는 공개·복사가능). r2u는 correlationId=tx_event_root라 면역.
+- **해소(A(b)):** 결과 이벤트에 발행자 주소 추가 → 그 발행자로만 라우팅. u2r=`LinkerResultElems`에 **EmitterDApp**(gidx5) + BPuN `onResult`에서 handlerDApp 제거·EmitterDApp 라우팅. r2u=`LinkerResult`→**`LinkerResultAttrs`** 리네임 + **emitterCcAddr** 추가, BPrN `OnResult`는 handlerCcId 유지 + `emitterCcAddr==BTIP9(self채널,handlerCcId)` 검증. **대원칙: 발행자가 결과를 수신·정산.** dApp(IBTIP26/BTIP26Token)·btip34-ccapp 무변경.
+- **반영:** docs(btip-21/29/24/26, commit `b927ca7`), linker-v2(on-bpun 컨트랙트+신규 `mocks/FakeEmitter.sol`, on-bprn linker-endpoint, prover btip19, test helpers+03/04/05+신규 `06-u2r-correlation-replay.test.ts`, commits `de752d1`+`c41fc3d`+`0b649c4`). 빌드: solc/go/tsc 전부 통과, e2e 미실행.
+- **별개 처리:** resultChainId를 BTIP-34 문서 정본에 맞춰 types/endpoint에서 제거(커밋 `5735c70`이 문서 없이 코드에만 넣어 빌드 깨졌던 것). btip18 wrapper 재설치(LinkerPolicyClient)·prover-ts tsconfig baseUrl 제거·qsccClient definite assignment(u2r 무관 툴체인 이슈).
+
+### 0000000.2 남은 작업
+
+- **task-contexts 커밋**: `.git/index.lock` 잔존(마운트 권한) → `rm -f task-contexts/.git/index.lock` 후 이 문서 + 설계기록 커밋.
+- **라이브 e2e**: 이벤트/selector 변경 → LinkerEndpoint(BPuN)·linker-endpoint(BPrN) 재배포 → 03/04/05 재실행 → 06은 FakeEmitter 배포 + `FAKE_EMITTER` env 세팅.
+- prover-ts package-lock 커밋(wrapper develop 재설치로 lock 갱신). BTIP-43 로드맵 시점에 resultChainId/`btip43Addr` 다중체인(문서+코드 함께).
 
 ---
 
