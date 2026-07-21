@@ -1,6 +1,27 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-07-14 (세션 종료 시점) — **아래 §0000000(2026-07-14 핸드오프)부터 읽기.** 직전 핸드오프는 §000000(2026-06-24), §00000(2026-06-18), §0000(2026-06-15), §000(2026-06-14), §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
+> 마지막 업데이트: 2026-07-21 (세션 종료 시점) — **아래 §00000000(2026-07-21 핸드오프)부터 읽기.** 직전 핸드오프는 §0000000(2026-07-14), §000000(2026-06-24), §00000(2026-06-18), §0000(2026-06-15), §000(2026-06-14), §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
+
+---
+
+## 00000000. 2026-07-21 핸드오프 (여기서부터 이어서 읽기)
+
+> 이 세션 본류: **배포/부트스트랩 툴링·설정 파일 구조 정리(프로토콜/Solidity 설계 아님).** reconcile-or-fail 멱등화, BPuN/BPrN 스크립트·설정 구조 재편, 신원 소스 통일, validatorSet 이전. **자기완결 상세: `deploy-bootstrap-tooling-2026-07-21.md`.**
+
+### 00000000.1 한 일 (요약 — 상세는 자기완결 기록)
+- **표준 순서 = 배포 → sync → bootstrap → provers → test.** `register-bpun-endpoint` 제거(순서 강제로 불필요).
+- **멱등 = reconcile-or-fail**(blind skip 금지): BPuN `initPolicy`는 온체인 `channelName` 비교(빈값→seed/일치→skip/다름→FAIL), BPrN `SetValidatorSet`은 `GetValidatorSet(height)`로 (pub_key,voting_power) 비교. `redeploy-token` 제거(=`deploy --only`+멱등 bootstrap).
+- **genesisPolicy**: `bprn-organizations/<ch>/genesis-policy.hex`에서 읽음(bpn 로컬/비추적, devnet 커밋). paymentChaincode=`BTIP34CCApp`·endpointCc=`LinkerEndpointCC` 고정, paymentChannel=CLI 채널명.
+- **BPuN scripts 구조**: `.net`→`config`, `beatoz/*`→`scripts/` 평탄화.
+- **BPrN counterpart 모델**: 정적 `config/config.<ch>.json`(토폴로지, 추적) ↔ 동적 `config/bootstrap.<bpunAlias>.json`(chainId+linkerEndpoint+validatorSet, sync생성, gitignore). BPrN bootstrap CLI=`<bprnChannel> <bpunChainAlias>`. sync-addresses 인자 1개(`<bpunAlias>`).
+- **신원 완전 통일**: bootstrap+prover+test 셋 다 connection-profile `clients[0]`(signedCertPath/privateKeyPath/mspId/id)에서 획득. `FABRIC_CERT_PATH/KEY/MSP/USER` env 폐지. bpn 프로파일에 `clients[0]` 추가(devnet 기존).
+- **validatorSet 이전**: BPrN config에서 제거 → sync가 BPuN `/validators?height=1`(providerUrl=CometBFT RPC) 조회해 counterpart 파일에 기록. bpn(1)·devnet(3) = BPuN 체인별 값.
+- **gitignore 대칭**: on-bprn `config/config.*` 무시(단 devnet·템플릿 추적), `config/bootstrap.*` 무시. `config.bpn.json` `git rm --cached`.
+
+### 00000000.2 남은 작업
+- **BPrN devnet**: bootstrap은 준비됨(신원·validatorSet). **deploy 미완** — devnet crypto는 deep 레이아웃, peer바이너리·fabric-config·Admin MSP 없음(User1만), 3-org 다중 endorsement 필요. (사용자 지시: devnet은 bootstrap부터, deploy는 나중.)
+- **재-sync 필요**: 이번 변경 후 counterpart 파일에 validatorSet 채우려면 sync 재실행(BPuN 체인 up 전제).
+- **수동 정리**(device_bash rm 불가): `_to_delete/` 폴더들, 빈 `on-bpun/scripts/beatoz/`, .gitignore 스테이징 후 커밋.
 
 ---
 
