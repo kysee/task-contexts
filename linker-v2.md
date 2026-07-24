@@ -1,6 +1,47 @@
 # Linker V2 Solidity 작업 컨텍스트
 
-> 마지막 업데이트: 2026-07-21 (세션 종료 시점) — **아래 §00000000(2026-07-21 핸드오프)부터 읽기.** 직전 핸드오프는 §0000000(2026-07-14), §000000(2026-06-24), §00000(2026-06-18), §0000(2026-06-15), §000(2026-06-14), §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
+> 마지막 업데이트: 2026-07-24 (세션 종료 시점) — **아래 §0000000000(2026-07-24 핸드오프)부터 읽기.** 직전 핸드오프는 §000000000(2026-07-22), §00000000(2026-07-21), §0000000(2026-07-14), §000000(2026-06-24), §00000(2026-06-18), §0000(2026-06-15), §000(2026-06-14), §00(2026-06-12), 직전 기준선은 §0(2026-06-10).
+
+---
+
+## 0000000000. 2026-07-24 핸드오프 (여기서부터 이어서 읽기)
+
+> 이 세션 본류: **설정 모델 재편 — sync-conf(생산자 push) 구축 → 타 시스템 e2e 검증 → 테스트 완전 자기완결화(bootstrap Mint 폐지) → autoconf(소비자 pull)로 최종 재편.** 전부 커밋 완료(9bb3829~809c1ea). **자기완결 상세: `autoconf-config-pull-2026-07-24.md`.**
+
+### 0000000000.1 한 일 (요약 — 상세는 자기완결 기록)
+
+- **autoconf(소비자 pull) 확정**: 생산자는 자기 산출물만 남기고, 소비 3곳이 각자 `npm run autoconf` 로 생산자 원시 산출물(on-bpun config·deployed.*, on-bprn config·connection-profile)을 읽어 자기 파일 생성 — on-bprn scripts(`-- <bpunChainAlias>` → `config/bootstrap.<alias>.json`, BPuN RPC `/validators?height=1` 직접 조회), prover-ts·test(`-- <bprnChannelName> <bpunChainAlias>` → 각자 `.env.<channelName>`/`.env.<chainAlias>`, prover-ts 는 btip18 `beatoz.network.json` 도). push 형 sync-conf.ts 2종 폐지. **test 는 `autoconf.ts`**(Node 22.18+ 타입 스트리핑으로 `node` 직접 실행, tsx 불요 — .mjs 로 만들었다가 사용자 지적으로 .ts 재작성).
+- **표준 순서**: on-bpun deploy→bootstrap → on-bprn deploy→**autoconf**→bootstrap → prover-ts **autoconf**→기동 4종 → test **autoconf**→실행. 재배포 시 소비 쪽 autoconf 재실행.
+- **env 체계·prover 인자화**(sync-conf 단계 확립, 계승): 접두사 없는 `.env.<bprnChannelName>`/`.env.<bpunChainAlias>`, 템플릿은 꺾쇠 파일명 그대로 추적. 모든 prover 는 선행 인자 2개로 env 로드(`common/env-files.ts`, 기존 환경변수 우선, `BPRN_CHANNEL_ID` 는 인자에서 주입 — env 에 없음). upsert: "항상" 덮어쓰기 / "없을 때만" 기본값(운영자 값 보존) / 끝 개행 보장.
+- **테스트 완전 자기완결**: 시나리오 1·2 에 `stcMint` 자체 시드, bootstrap 초기 Mint 단계·config `btip34.mint` 블록 폐지(btip34 admin TOFU=최초 관리자전용함수 호출 신원=clients[0] 이므로 안전), `TEST_PAYER`/`TEST_BENEFICIARY` 는 임의 주소 기본값 `0x…a001`(하드코딩 `0x3FD3…` 제거). 배경: 타 시스템 e2e 1차 실패(mint.to↔payer 불일치) 근본 해소.
+- **트러블슈팅**(상세 기록의 §5): TEST_PAYER 19바이트 버그, btip18 `EADDRINUSE :5000`(macOS AirPlay → `.env.localnet0` 에 `BTIP18_R2U_POLICY_PORT=3018`), btip39 validator set 미등록(bootstrap 인자 누락), upsert 끝 개행 버그.
+
+### 0000000000.2 남은 작업
+
+- **클린 체인 e2e 1회**(mint 폐지 + autoconf 재편 반영 상태로): autoconf 3곳 → prover 재기동 → test.
+- **미결 결정**: beatoz.network.json 추적 diff(비추적+템플릿화 권장안 제시), btip18 기본 포트 5000→3018 코드 반영, on-bprn 수동 mint 명령, bootstrap 인자 누락 경고, bpn 프로파일·config.bpn.json 추적 전환(7-22 이월).
+- usage 문자열 `bprnChannelAlias` → `bprnChannelName` 통일(on-bpun bootstrap.ts·setup.sh, test run.mjs — 7-22 이월).
+
+---
+
+## 000000000. 2026-07-22 핸드오프 (여기서부터 이어서 읽기)
+
+> 이 세션 본류: **linker-v2 README 전면 정리(한국어) + 파생 코드 정리 — deploy.sh→deploy.ts 전환(라이브 테스트 통과), on-bprn 헬퍼 신원 clients[0] 통일, FABRIC_*→BPRN_* env 리네임, bpn connection-profile.json 소실 발견·재생성.** **자기완결 상세: `readme-tooling-cleanup-2026-07-22.md`.**
+
+### 000000000.1 한 일 (요약 — 상세는 자기완결 기록)
+
+- **README 7개 반영(전부 한국어)**: 루트(개요+전제조건+표준순서 디렉토리 단위+배포현황 통합), on-bpun 루트(보일러플레이트 교체)·on-bprn 루트(신설), 양쪽 scripts(on-bprn은 전면 재작성: 전제조건 1회 서술+파일 요구 2갈래+설정파일 절), test(한국어화+코드 기준 정정: `LinkerResultAttrs`·`onResult(payload)`), prover-ts(신설: registry 해석 전제·btip18/39 env·최소 조합·int64 CAUTION). 표기 통일 **`<bprnChannelName>`**/`<bpunChainAlias>`.
+- **deploy.ts 전환**(on-bprn/scripts): 주소·TLS·MSPID=connection-profile.json 파싱, 도구 경로=config `deploy` 필드 **필수 3종**(peerBin/adminMsp/fabricCfgPath, flat 폴백 없음), 좌표 env 폐지(CC_VERSION/SEQUENCE만 유지), lifecycle=peer CLI spawn. 구 deploy.sh→`_to_delete/`. **사용자 라이브 배포 테스트 통과.**
+- **pay/approve/balance 신원 통일**: DEFAULT_IDENTITY(user1-* flat 하드코딩) 제거 → profile `clients[0]`(7-21 통일의 누락분). on-bprn 스크립트 flat 이름 코드 의존 완전 제거. tsc 통과·라이브 미검증.
+- **`BPRN_*` env 리네임**: BPRN_CONNECTION_PROFILE/BPRN_CHANNEL_ID/BPRN_COMMIT_SIG_METADATA_INDEX (소비처=prover env.ts·test config.ts, env 파일·btip19/28 README 일괄). example 폐지변수 4줄 삭제 + 파일명 `.env.bprn.channelName.example`. FABRIC_CFG_PATH만 유지. 구동 중 prover 재시작 필요.
+- **bpn connection-profile.json 재생성**: 소실 발견(비추적) → devnet 스키마 단일 org 축소로 재생성, 라이브 테스트로 검증. 유실 위험 상존.
+- **규칙 확정**: md 개행 공백 2개, Fabric 대신 BPrN 워딩, `<bprnChannelName>`(디렉토리·config 파일명=채널명 규칙).
+
+### 000000000.2 남은 작업
+
+- 코드 usage 문자열 `bprnChannelAlias`/`<bprnChannel>` → `bprnChannelName` 통일(on-bpun bootstrap.ts·setup.sh, on-bprn bootstrap.ts, test run.mjs).
+- BPRN_* 리네임 후 e2e 1회 + pay/approve/balance 라이브 1회 확인.
+- git 커밋(사용자, README+코드 일괄). bpn 프로파일·config.bpn.json 추적 전환 여부 결정.
 
 ---
 
