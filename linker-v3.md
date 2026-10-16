@@ -1,8 +1,50 @@
-# Linker for Besu — 설계 작업 컨텍스트
+# Linker Protocol V3 — 설계 작업 컨텍스트 (구 linker-for-besu.md)
 
-> 마지막 업데이트: 2026-10-07 — **아래 §0000(2026-10-07 BTIP 재편: 공통 인터페이스 50~54)부터 읽기.** 직전은 §000(방법 2 재편), §00(설계 결정·BTIP 초안), §0(착수·신뢰 사슬·gas 산정).  
-> 트랙 성격: **설계 단계(구현 아님)**. Linker V2 개념(검증된 Tx/Event 사실을 상대 체인에 전달, 2PC는 앱 책임)을 BPrN(Fabric) 대신 **Hyperledger Besu(QBFT)** 위에서 구현할 수 있는지, 어떤 방법인지 탐색한다.  
-> Linker V2 본류 기록은 `linker-v2.md`(별도 트랙). 이 파일은 Besu 트랙 전용 러닝 로그.
+> 마지막 업데이트: 2026-10-16 — **아래 §00000(2026-10-16 보안성 검토 → V3 결정: 지정 전달·Endpoint 발행·완결 이벤트)부터 읽기.** 직전은 §0000(BTIP 재편: 공통 인터페이스 50~54), §000(방법 2 재편), §00(설계 결정·BTIP 초안), §0(착수·신뢰 사슬·gas 산정).  
+> 트랙 성격: **설계 단계(구현 아님)**. 2026-10-16부로 이 트랙은 "Besu 지원"에 그치지 않고 **Linker Protocol의 새 버전(V3)을 새 BTIP 번호로 정의**하는 트랙이 되었다. 기존 BTIP(V2)은 고치지 않고 deprecated 한다. §0000 까지의 기록은 V3의 전사(前史)이며, Besu 증명(b0/b2/b4 백업, 공통 인터페이스 50~54 초안)은 V3의 재료로 승계된다.  
+> Linker V2 본류 기록은 `linker-v2.md`(별도 트랙, 2026-07-24 이후 갱신 없음). 이 파일은 V3 전용 러닝 로그. 파일명은 2026-10-16 `linker-for-besu.md` → `linker-v3.md` 로 변경(사용자 지시).
+
+---
+
+## 00000. 2026-10-16 보안성 검토 — "엉뚱한 핸들러로 REJECTED 유도" 취약점 → V3 설계 결정
+
+> 이 세션 본류: **사용자가 제기한 2PC 취약점 분석 → 현 설계(V2)의 방어선이 앱 계층에만 있음을 확인 → 프로토콜 계층 방어(지정 전달)로 전환 결정 → 그 귀결로 LinkerEndpoint 발행 모델·체인 포함 식별자·완결 이벤트까지 결정 → 기존 문서 수정이 아닌 새 버전(V3) BTIP 로 정의하기로 결정.** 코드·문서 변경 없음(결정 기록만).
+
+### 00000.1 한 일 — 취약점 분석
+
+- **시나리오(사용자 제기)**: 사용자 U 가 소스 체인에서 Tx1(e.g. 지급) 발행 → 작업 W1 보류(pending). U 가 Proof_Tx1 을 타겟 체인 dApp1 에 제출해 성공(e.g. NFT 수령) → `LinkerResult(ACCEPTED)`. 동시에 U 가 Proof_Tx1 을 **자기 컨트랙트 dAppX** 에 제출, dAppX 는 무조건 REJECTED → `LinkerResult(REJECTED)`. U 가 REJECTED 결과증명을 소스에 먼저 제출 → W1 취소(e.g. 반환). U 는 NFT 도 보유.  
+- **V2 에서 성립 여부: 성립한다(프로토콜 계층에서 열려 있음).** 근거:  
+  - 타겟 Nullifier 는 `(eventKey, handlerDApp)` 단위 소비(BTIP24/52). 06-24 griefing 검토에서 "제3자가 엉뚱한 dApp 으로 먼저 흘려 정당한 dApp 수신을 영구 차단"을 막기 위해 per-handler 로 확정한 **의도된 설계**. 그 대가로 같은 증명이 dApp1·dAppX 에 각각 한 번씩 소비되고 두 `LinkerResult` 가 모두 정당하게 발행된다.  
+  - 소스 Nullifier 는 결과 이벤트 단위(`event_attrs_root`)라 두 결과증명이 모두 통과. BTIP34 상태 머신은 종료-1회성이므로 **먼저 도착한 결과가 이긴다**.  
+- **V2 의 방어선 = 앱 계층(#5a IntendedHandler 바인딩)**: BTIP34(Application Chaincode interface on BPrN) "발신 체인코드는 lock 시점에 의도한 핸들러를 기록하고 `HandleLinkerResult` 의 `handlerDApp` 과 일치할 때만 완결". btip34-ccapp 은 `pending.HandlerDApp == handlerDApp` 대조 구현, BTIP46Token 은 u2r 쪽 `handlerCcId` 대조(06-24 추가). 프로토콜은 "누가 판정했는가"의 위조 불가성만 보증.  
+- **발견된 문제**:  
+  1. BTIP34 안에서 의무 강도가 불일치 — 한 곳은 "의도한 dApp 정보를 알 수 있다면 기록 권장", 다른 곳은 "일치할 때만 완결". 생략한 앱은 그대로 노출.  
+  2. btip34-ccapp 은 의도한 핸들러를 **지급 수취인 `To`** 로 대신 쓴다(`HandlerDApp: to`). 그런데 사용자 전제상 `To` ≠ 핸들러 — "a 가 b 에게 STC 를 보냈다"는 사실은 제3의 컨트랙트 c 도 소비할 수 있어야 하므로(아래 "원래 용도"), `To` 는 일반 규칙이 될 수 없다.  
+  3. 공통 인터페이스 초안(BTIP51/53)에는 이 의무가 어디에도 없음.  
+- **"의도한 핸들러"를 발신 앱이 아는 유일한 출처는 요청자 본인**: 요청에 `Handler`(2PC 상대방) 필드를 두고 요청자가 선언. 요청자가 잘못 선언하면 손해는 요청자만 본다(dApp1 이 `Handler == self` 검사 시 가치 미지급, 상대방 b 는 ACCEPTED 없이는 받지 못함). 앱 계층으로만 막을 경우 필요한 세 검사: (1) `Handler` 를 요청 이벤트 요소로 발행해 증명에 결속, (2) 가치를 내주는 dApp 은 `Handler == address(this)` 아니면 revert, (3) 발신 앱은 `handlerDApp == pending.Handler` 아니면 거부.  
+- **원래 "여러 컨트랙트가 하나의 증명을 소비" 를 허용한 이유(사용자)**: 납부증명 — 세금 납부 Tx1 의 사실을 증빙으로 요구하는 곳이 여럿일 수 있고 각각이 dApp. 그러나 **2PC 도입으로 의미가 약화됨**: Tx1 증명은 "시도·보류" 까지만 증명하고 2PC 로 취소될 수 있어 '납부 사실' 자체는 증명하지 못한다.
+
+### 00000.2 결정 사항 (V3)
+
+1. **지정 전달(프로토콜 계층 강제)**: 요청 이벤트에 `Handler`(= `dstApp`) 를 포함하고, 타겟 LinkerEndpoint 는 **증명 안의 `dstApp` 에게만 전달**한다. `onProof` 의 `handlerDApp` 파라미터는 제거(증명에서 도출). 이로써 위 취약점은 프로토콜 계층에서 닫히고, 앱 계층 검사 (2)(3) 와 lock 레코드의 핸들러 기록이 불필요해진다. 7-14 의 `onResult` 변경(결과증명 안의 `emitterDApp` 으로 라우팅)과 대칭 — 요청은 `dstApp`, 결과는 `srcApp` 으로.  
+   - 귀결: **제3의 컨트랙트 c 가 2PC 요청 증명을 소비하는 것은 포기**(사용자 확인). per-handler Nullifier 의 존재 이유(엉뚱한 dApp 으로의 소진 griefing)가 사라지므로 Nullifier 키는 `(srcChainId, eventKey)`.  
+   - `Handler` 미지정(0) 요청을 "누구나 소비" 로 열어둘지는 미결(아래 00000.3).  
+2. **LinkerEndpoint 발행 모델**: dApp/ccApp 이 이벤트를 직접 발행하지 않고 **`LinkerEndpoint.send(dstChainId, dstApp, appData)`** 를 호출, Endpoint 가 **공통 헤더 `(srcChainId, srcApp, dstChainId, dstApp, nonce)`** 를 붙여 최종 이벤트를 발행한다(LayerZero endpoint.send / Axelar gateway.callContract 형). 효과: 헤더 위치가 Linker 소관 고정 자리가 되어 "핸들러 위치를 핸들러에게 묻는 순환"(BTIP29 의 `ref.CorrelationIndex` 방식) 해소; `srcApp` 은 Endpoint 가 `msg.sender` 로 인증 → 요청 이벤트도 결과증명처럼 "공식 Endpoint 가 발행" 검사 가능 → `onProof`/`onResult` 가 같은 수신 경로로 통합(결과 = `dstApp` 이 요청의 `srcApp` 인 메시지); `send` 반환값으로 `eventKey`(= correlationId) 를 돌려주므로 앱이 BTIP16 머클 루트를 직접 계산할 필요 없음. 소스 체인에도 Endpoint 배포가 필수가 됨(양쪽에 이미 있으므로 수용).  
+   - **BPrN 제약(과도기)**: Fabric 은 `InvokeChaincode` 로 호출된 체인코드의 `SetEvent` 가 블록에 기록되지 않고(최초 호출 체인코드의 이벤트만 기록), `msg.sender` 에 해당하는 것도 없다. 따라서 BPrN 에서는 **ccApp 이 발행하되 헤더는 bprn-sdk-go 공통 라이브러리가 구성**하고, `srcApp` 은 피어가 귀속시키는 `chaincode_id` 로 얻는다. 공통 인터페이스 문서에서 "헤더를 누가 붙이는가" 는 체인별 구현 사항으로 둔다.  
+3. **체인 포함 식별자**: 앱 식별자 = `(chainId, address)` 쌍. 헤더의 `srcApp`/`dstApp` 은 항상 `srcChainId`/`dstChainId` 와 짝으로 해석. 타겟 Endpoint 는 `dstChainId == 자기 체인`(BPrN 은 BTIP49 값) 을 먼저 확인 후 `dstApp` 라우팅 — 같은 주소가 다른 타겟 체인에서 소비되는 경로 차단. 재료: BTIP49(BPrN Identifier Conversion), BTIP50(LinkerRegistry Common Interface) 의 `(role, forChainId, atChainId)`.  
+4. **완결 이벤트(2PC 완결의 증명)**: 보류 상태가 결과증명으로 `SETTLED`/`REFUNDED` 로 전이하는 소스 체인 트랜잭션(Tx3) 에서 발신 앱이 완결 이벤트(e.g. `Settled(correlationId, ...)`) 를 발행한다. 종료 상태는 1회성이라 되돌릴 수 없으므로 **Tx3 증명 = "완결되었음" 의 증명**이며, `Handler` 없는 순수 사실로 **누구나 소비**한다. 즉 "지정 전달" 은 2PC 왕복에, "공개 소비" 는 완결된 사실에 각각 대응 — 둘을 같은 이벤트로 겸하려던 것이 원래의 긴장이었다. 반대급부 없는 납부(세금 등)는 애초에 2PC 에 넣지 않고 소스에서 즉시 확정 → Tx1 증명이 그대로 납부증명. (타겟 Endpoint 가 `(srcChainId, eventKey) → status` 를 저장하면 같은 체인의 소비자가 ACCEPTED 를 조회할 수 있으나 이는 "확정될 것" 이지 "확정되었다" 가 아님 — 소스 원장이 권위인 용도에는 Tx3 증명.)  
+5. **문서 전략**: 위 변경은 기존 BTIP 수정이 아니라 **Linker Protocol V3 를 새 BTIP 번호로 정의**하고 Besu 지원을 포함한다(사용자 결정). §0000 의 "새 번호 + 기존 deprecated" 원칙의 확장. feat/besu 의 49~54 초안은 V3 재료이되 **1·2 의 귀결로 51(Endpoint: `send` 추가, `onProof/onResult` 통합, `handlerDApp` 제거)·52(Nullifier 키에서 `handlerDApp` 제거)·53(`VerifiedEvent` 에 헤더 필드) 가 크게 바뀐다** — 초안 보강(§0000.4 항목 1) 전에 이 결정을 먼저 반영.  
+6. **Linker 의 성격 변화(요약)**: "검증된 사실의 공개 전달" → "검증된 메시지의 지정 전달 + 완결된 사실의 공개 전달". 2PC = 요청 메시지와 결과 메시지의 왕복.
+
+### 00000.3 남은 작업 / 미결
+
+1. **미결 결정**: `Handler`(`dstApp`) 미지정 요청을 허용할지(허용 시 "누구나 소비" 모드 — 완결 이벤트·비 2PC 납부에 사용) 또는 모든 메시지를 지정 전달로 통일하고 공개 사실은 별도 이벤트 종류로 둘지.  
+2. **미결 결정**: 공통 헤더의 정확한 필드와 `eventKey`/`correlationId` 도출 규칙(`nonce` 포함 여부, Endpoint 부여 순번 vs 체인 고유 위치 `(block, txIndex, logIndex)`).  
+3. **미결 결정**: BPrN 의 "ccApp 발행 + 라이브러리 헤더" 와 EVM 의 "Endpoint 발행" 비대칭을 공통 인터페이스에서 어떻게 표현할지(V3 가 BPrN 을 어느 수준까지 지원할지와 연동).  
+4. **V3 BTIP 번호·구성 결정**: 49~55 배정을 유지할지, V3 로 재배정할지. 후보 구성 — 공통 헤더/메시지 모델, LinkerRegistry, LinkerEndpoint(`send` + 수신 통합), LinkerNullifier, LinkerVerifier(`VerifiedEvent` 헤더 포함), LinkerPolicy, dApp 콜백(`handleLinkerMessage`/`handleLinkerResult`, `Handler` 자기 검사 불필요), 완결 이벤트 규약, 체인별 증명(BPrN/BPuN/Besu).  
+5. 리베이스: feat/besu 는 `0c01837` 분기, develop 에 `7bf0afe`(LinkerResultAttrs + emitter, `onResult(payload)`) 가 들어옴 — V3 초안은 develop 기준으로 재작성.  
+6. §0000.4 의 항목들(51~54 보강, 55 작성, deprecated 표기, 코드 작업 목록) 은 위 결정 반영 후 재정렬.  
+7. 코드 변경 없음. 기존 V2 코드(linker-v2 develop `ee6f0e5`)는 V2 문서와 일치 상태 유지.
 
 ---
 
